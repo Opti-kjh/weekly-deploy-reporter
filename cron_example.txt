@@ -1,0 +1,5 @@
+# 매주 월요일 오전 10시: 최초 생성
+0 10 * * 1 cd /Users/eos/Desktop/gemini && /usr/bin/python3 create_weekly_report.py create && /opt/homebrew/bin/node getJiraDeployedBy.js
+
+# 매주 월~금 오전 9시~오후 8시, 매시간마다: 페이지 업데이트
+0 9-20 * * 1-5 cd /Users/eos/Desktop/gemini && /usr/bin/python3 create_weekly_report.py update && /opt/homebrew/bin/node getJiraDeployedBy.js

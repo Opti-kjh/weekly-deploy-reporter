@@ -1,0 +1,77 @@
+{
+	"meta": {
+		"generatedAt": "2025-07-15T04:51:13.393Z",
+		"tasksAnalyzed": 8,
+		"totalTasks": 10,
+		"analysisCount": 8,
+		"thresholdScore": 5,
+		"projectName": "weekly-reporter",
+		"usedResearch": false
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 4,
+			"taskTitle": "Confluence 페이지 생성 및 갱신 로직",
+			"complexityScore": 8,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Break down the Confluence page creation/update logic into subtasks such as: (1) Confluence API client integration, (2) Page existence check and idempotent create/update logic, (3) Dynamic content generation (issue/deployment tables), (4) Jira macro insertion, (5) Integration and end-to-end test with sample data.",
+			"reasoning": "This task involves multiple integration points (Confluence API, dynamic content generation, idempotency), requires robust error handling, and must ensure correct formatting and update logic. The need for both creation and update flows, plus dynamic table and macro handling, increases complexity and warrants several focused subtasks."
+		},
+		{
+			"taskId": 5,
+			"taskTitle": "Jira 매크로 및 배포 티켓 테이블 렌더링",
+			"complexityScore": 6,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Expand this task into subtasks such as: (1) Generate Confluence storage format markup for Jira macro tables, (2) Render deployment ticket tables with related fields, (3) Validate table readability and accessibility in Confluence.",
+			"reasoning": "While the rendering logic is specialized, it is mostly focused on data formatting and markup generation. The main complexity lies in correct Confluence markup and ensuring accessibility, but the scope is narrower than full API integration tasks."
+		},
+		{
+			"taskId": 6,
+			"taskTitle": "Slack 알림 로직",
+			"complexityScore": 5,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Decompose the Slack notification logic into: (1) Slack Webhook integration and authentication, (2) Message formatting with mentions and context, (3) Trigger logic for create/update events and testing.",
+			"reasoning": "Slack integration is relatively straightforward, but message formatting and correct event triggering add moderate complexity. The task can be efficiently split into integration, formatting, and trigger/test subtasks."
+		},
+		{
+			"taskId": 7,
+			"taskTitle": "이슈 변경 감지 및 스냅샷 관리",
+			"complexityScore": 7,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Expand into: (1) Snapshot file I/O and schema definition, (2) Change detection logic between snapshots, (3) Triggering downstream updates/notifications on change, (4) Error handling and unit tests for snapshot logic.",
+			"reasoning": "This task requires careful state management, efficient comparison logic, and robust error handling. The need to avoid redundant updates and ensure data integrity increases both cognitive and technical complexity."
+		},
+		{
+			"taskId": 8,
+			"taskTitle": "Crontab 스케줄링 및 스크립트 진입점",
+			"complexityScore": 4,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Split into: (1) Script entrypoint implementation for create/update modes, (2) Crontab registration and monitoring/logging setup.",
+			"reasoning": "Scheduling and entrypoint setup are standard DevOps tasks with low algorithmic complexity, but require attention to operational detail. Two subtasks suffice for clear separation of concerns."
+		},
+		{
+			"taskId": 9,
+			"taskTitle": "에러 처리 및 로깅",
+			"complexityScore": 5,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Expand into: (1) Implement try/except wrappers for API and file operations, (2) Structured error/warning logging with timestamps, (3) User-friendly error messages and configuration validation.",
+			"reasoning": "Error handling and logging are cross-cutting concerns but follow established patterns. The main complexity is ensuring coverage and clarity, which can be managed with three focused subtasks."
+		},
+		{
+			"taskId": 10,
+			"taskTitle": "엔드투엔드 통합 및 인수 테스트",
+			"complexityScore": 9,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Decompose into: (1) Test case design for all workflow scenarios, (2) Automated test script implementation, (3) Manual verification of Confluence and Slack outputs, (4) Log and snapshot consistency checks, (5) Documentation of test results and regression procedures.",
+			"reasoning": "End-to-end testing across multiple systems (Jira, Confluence, Slack) is highly complex, requiring comprehensive scenario coverage, automation, and manual validation. Multiple subtasks are needed to ensure reliability and documentation."
+		},
+		{
+			"taskId": 3,
+			"taskTitle": "Jira 이슈 조회 및 필터링 모듈",
+			"complexityScore": 5,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Break down this task with a focus on jira 이슈 조회 및 필터링 모듈.",
+			"reasoning": "Automatically added due to missing analysis in AI response."
+		}
+	]
+}
