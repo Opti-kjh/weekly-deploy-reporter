@@ -1,0 +1,96 @@
+---
+alwaysApply: true
+---
+## 3. 실제 프로젝트 구조
+
+```plaintext
+weekly-deploy-reporter/
+├── AGENTS.md
+├── CLAUDE.md
+├── LICENSE
+├── README.md
+├── commitlint.config.js
+├── create_confluence_page_content
+├── create_weekly_report.py
+├── cron_example.txt
+├── cron.log
+├── cron_test.log
+├── deploy_ticket_links.csv
+├── deploy_ticket_links.json
+├── getJiraDeployedBy.js
+├── notified_deploy_keys.json
+├── package.json
+├── temp_crontab_config.txt
+├── weekly_issues.json
+├── weekly_issues_snapshot.json
+├── yarn.lock
+├── .cz-config.js
+├── .gitignore
+├── .cursorignore
+├── .roomodes
+├── node_modules/
+├── venv/
+├── tests/
+│   ├── test_create_weekly_report.py
+│   └── __pycache__/
+├── .taskmaster/
+│   ├── config.json
+│   ├── state.json
+│   ├── tasks/
+│   │   └── tasks.json
+│   ├── templates/
+│   │   └── example_prd.txt
+│   ├── reports/
+│   │   └── task-complexity-report.json
+│   └── docs/
+│       └── weekly-report-prd.txt
+├── .github/
+├── .husky/
+├── .clinerules/
+├── .pytest_cache/
+├── .benchmarks/
+├── .specstory/
+└── __pycache__/
+```
+
+---
+
+## 4. 주요 폴더/파일 설명
+
+- `create_weekly_report.py` : 주간 리포트 생성 메인 파이썬 스크립트
+- `getJiraDeployedBy.js` : Jira 배포자 정보 추출 JS 스크립트
+- `deploy_ticket_links.json/csv` : 배포 티켓 링크 데이터
+- `weekly_issues.json`, `weekly_issues_snapshot.json` : 이슈 스냅샷 및 현황 데이터
+- `cron.log`, `cron_test.log` : 크론 실행 및 테스트 로그
+- `README.md` : 프로젝트 설명 및 실행 방법
+- `.taskmaster/` : TaskMaster 관련 설정, 작업, 템플릿, 리포트, 문서
+  - `tasks/tasks.json` : TaskMaster 작업 정의
+  - `templates/` : PRD 등 템플릿
+  - `reports/` : 작업 복잡도 등 리포트
+  - `docs/` : 산출물/문서
+- `tests/` : 테스트 코드 및 캐시
+- `node_modules/`, `venv/` : Node, Python 의존성 디렉토리
+
+---
+
+## 5. 문서화 및 버전 관리
+
+- 모든 공개 API/스크립트에는 문서 주석을 작성합니다.
+- README.md에 프로젝트 설정 및 실행 방법을 상세히 기술합니다.
+- 복잡한 알고리즘/비즈니스 로직은 별도 문서로 작성합니다.
+- 변경 사항은 CHANGELOG 또는 커밋 메시지에 기록합니다.
+- 커밋 메시지는 명확하고 설명적으로 작성합니다.
+- 기능 개발은 별도 브랜치에서 진행하고, PR 전 코드 리뷰를 필수로 합니다.
+- 메인 브랜치는 항상 배포 가능한 상태로 유지합니다.
+
+---
+
+## 6. 적용 예시 (현재 프로젝트 기준)
+
+- Python, JS 스크립트는 각각 역할별로 파일 분리 및 주석 작성
+- TaskMaster 관련 작업은 `.taskmaster/` 하위에 정의 및 관리
+- 테스트는 `tests/`에 작성
+- 환경 변수 및 민감 정보는 `.env` 또는 별도 설정 파일에 저장, 코드에 직접 노출 금지
+- 코드 리뷰와 테스트를 거친 후에만 메인 브랜치에 병합
+
+---

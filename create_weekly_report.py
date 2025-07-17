@@ -14,7 +14,7 @@ import html
 from datetime import datetime, date, timedelta
 
 # .env 파일에서 환경 변수들을 읽어와서 현재 환경에 설정합니다.
-# 예: ATLASSIAN_URL, ATLASSIAN_USERNAME, ATLASSIAN_API_TOKEN 등
+# 예: ATLASSIAN_URL, ATLASSIAN_USERNAME, ATLASSIAN_API_TOKEN, SLACK_WEBHOOK_URL, SLACK_BOT_TOKEN 등
 load_dotenv()
 
 # --- 스크립트 설정 값 ---
@@ -152,7 +152,7 @@ def create_confluence_content(jql_query, issues, jira_url):
                         # API로 개별 조회 (성능상 이슈가 있을 수 있음)
                         try:
                             resp = requests.get(f"{jira_url}/rest/api/2/issue/{linked_key}",
-                                               auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
+                                auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
                             if resp.status_code == 200:
                                 linked_summary = resp.json()['fields'].get('summary', '')
                                 deploy_ticket_summaries[linked_key] = linked_summary
@@ -169,7 +169,7 @@ def create_confluence_content(jql_query, issues, jira_url):
                     if linked_summary is None:
                         try:
                             resp = requests.get(f"{jira_url}/rest/api/2/issue/{linked_key}",
-                                               auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
+                                auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
                             if resp.status_code == 200:
                                 linked_summary = resp.json()['fields'].get('summary', '')
                                 deploy_ticket_summaries[linked_key] = linked_summary
@@ -295,7 +295,7 @@ def get_slack_user_id_by_email(email):
             # Slack API가 'users_not_found' 에러를 반환하는 경우는 흔하므로,
             # 불필요한 로그를 줄이기 위해 해당 에러는 출력하지 않습니다.
             if data.get('error') != 'users_not_found':
-                 print(f"Slack에서 이메일({email})로 사용자 찾기 실패: {data.get('error')}")
+                print(f"Slack에서 이메일({email})로 사용자 찾기 실패: {data.get('error')}")
             return None
     except requests.exceptions.RequestException as e:
         print(f"Slack API 호출 중 오류 발생: {e}")
