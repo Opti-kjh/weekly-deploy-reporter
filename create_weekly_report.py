@@ -474,6 +474,43 @@ def write_cron_log(message):
         f.write(message + "\n")
 
 # === [3단계] main() 간결화 및 불필요 코드/주석 제거 ===
+
+def get_changed_issues(prev, curr, jira_url):
+    """
+    이전 스냅샷(prev)과 현재 스냅샷(curr)을 비교하여 변경된 IT티켓 목록을 반환합니다.
+    - 새로 추가된 티켓
+    - 주요 정보(제목, 담당자, 상태, 배포일 등)가 변경된 티켓
+    Args:
+        prev (list): 이전 스냅샷
+        curr (list): 현재 스냅샷
+        jira_url (str): Jira base URL
+    Returns:
+        list: 변경된 티켓의 dict 목록 [{key, summary, url}]
+    """
+    prev_dict = {i['key']: i for i in prev or []}
+    curr_dict = {i['key']: i for i in curr or []}
+    changed = []
+    for key, curr_issue in curr_dict.items():
+        prev_issue = prev_dict.get(key)
+        if not prev_issue:
+            # 새로 추가된 티켓
+            changed.append({
+                'key': key,
+                'summary': curr_issue.get('summary', ''),
+                'url': f"{jira_url}/browse/{key}"
+            })
+        else:
+            # 주요 정보 변경 여부 확인
+            for field in ['summary', 'assignee', 'status', 'deploy_date']:
+                if curr_issue.get(field) != prev_issue.get(field):
+                    changed.append({
+                        'key': key,
+                        'summary': curr_issue.get('summary', ''),
+                        'url': f"{jira_url}/browse/{key}"
+                    })
+                    break
+    return changed
+
 def main():
     # 1. 환경 변수 로딩
     try:
@@ -495,7 +532,7 @@ def main():
     try:
         jira = Jira(url=atlassian_url, username=atlassian_username, password=atlassian_token, cloud=True)
         confluence = Confluence(url=atlassian_url, username=atlassian_username, password=atlassian_token, cloud=True)
-        print(f"Jira/Confluence 서버 연결 성공!: {get_now_str()}\n")
+        print(f"\nJira/Confluence 서버 연결 성공!: {get_now_str()}")
     except Exception as e:
         print(f"Jira/Confluence 연결 오류: {e}")
         return
@@ -525,6 +562,9 @@ def main():
         log(f"실행시간: {get_now_str()}\n업데이트 할 사항 없음.")
         return
 
+    # 변경된 IT티켓 목록 추출
+    changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
+
     # 6. Confluence 페이지 생성/업데이트 및 Slack 알림
     page_content = create_confluence_content(jql_query, issues, atlassian_url)
     try:
@@ -539,7 +579,15 @@ def main():
                     parent_id=parent_page_id, type='page', representation='storage'
                 )
                 print(f"'{page_title}' 페이지 업데이트 완료.")
-                send_slack(f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}")
+                # 변경된 IT티켓 목록을 슬랙 메시지에 포함
+                if changed_issues:
+                    issue_list = '\n'.join([
+                        f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
+                    ])
+                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                else:
+                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}"
+                send_slack(slack_msg)
                 notify_new_deploy_tickets(issues, atlassian_url, page_title)
                 log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 업데이트.")
             else:
@@ -553,7 +601,12 @@ def main():
             print("✅ Confluence 페이지 생성 완료!")
             page_id = confluence.get_page_id(space=confluence_space_key, title=page_title)
             page_url = f"{atlassian_url}/wiki/spaces/{confluence_space_key}/pages/{page_id}"
-            send_slack(f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}")
+            # 생성 시에는 전체 목록 표시
+            issue_list = '\n'.join([
+                f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
+            ])
+            slack_msg = f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+            send_slack(slack_msg)
             notify_new_deploy_tickets(issues, atlassian_url, page_title)
             log(f"실행시간: {get_now_str()}\n내용: {page_title} 페이지 생성.")
     except Exception as e:
