@@ -71,10 +71,39 @@ def normalize_html_content(html_content):
     unescaped = html.unescape(html_content)
     return re.sub(r'\s+', ' ', unescaped).strip()
 
+# 기본 Jira 매크로 (날짜 포맷 없음)
 JIRA_MACRO_TEMPLATE = '''
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">key,type,summary,assignee,status</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+</ac:structured-macro>
+'''
+
+# 날짜 컬럼용 매크로 (updated, created, 예정된 시작)
+JIRA_DATE_MACRO_TEMPLATE = '''
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">updated,created,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+</ac:structured-macro>
+'''
+
+# 모든 컬럼을 포함하되 날짜 포맷이 적용된 매크로
+JIRA_FULL_MACRO_TEMPLATE = '''
 <ac:structured-macro ac:name="jira">
   <ac:parameter ac:name="columns">key,type,summary,assignee,status,updated,created,예정된 시작</ac:parameter>
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+</ac:structured-macro>
+'''
+
+# 각 날짜 컬럼별로 다른 포맷을 적용하는 예시 (필요시 사용)
+JIRA_CUSTOM_DATE_FORMAT_TEMPLATE = '''
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">key,type,summary,assignee,status,updated,created,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+  <ac:parameter ac:name="columnWidths">100,80,300,120,100,150,150,150</ac:parameter>
 </ac:structured-macro>
 '''
 
@@ -125,7 +154,8 @@ def format_jira_datetime(dt_str):
         return dt_str  # 파싱 실패 시 원본 반환
 
 def create_confluence_content(jql_query, issues, jira_url):
-    macro = JIRA_MACRO_TEMPLATE.format(jql_query=jql_query)
+    # 날짜 포맷이 적용된 전체 매크로 사용
+    macro = JIRA_FULL_MACRO_TEMPLATE.format(jql_query=jql_query)
     html_rows = []
     # 배포티켓(링크) summary 캐싱용 딕셔너리
     deploy_ticket_summaries = {}
@@ -263,6 +293,49 @@ def save_notified_deploy_keys(keys):
     with open("notified_deploy_keys.json", "w") as f:
         # set을 list로 변환하여 JSON 형식으로 파일에 저장합니다.
         json.dump(list(keys), f)
+
+def get_notified_changes():
+    """
+    이미 Slack 알림을 보낸 변경사항의 해시를 파일에서 읽어옵니다.
+    이 함수는 중복 알림을 방지하기 위해 사용됩니다.
+
+    Returns:
+        set: 알림을 보낸 변경사항 해시들의 집합(set). 파일이 없거나 오류 발생 시 빈 집합을 반환합니다.
+    """
+    try:
+        with open("notified_changes.json", "r") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_notified_changes(changes):
+    """
+    Slack 알림을 보낸 변경사항 해시를 JSON 파일에 저장합니다.
+
+    Args:
+        changes (set): 저장할 변경사항 해시들의 집합(set)
+    """
+    with open("notified_changes.json", "w") as f:
+        json.dump(list(changes), f)
+
+def generate_change_hash(changed_issues, page_title):
+    """
+    변경사항과 페이지 제목을 기반으로 고유한 해시를 생성합니다.
+    
+    Args:
+        changed_issues (list): 변경된 이슈 목록
+        page_title (str): 페이지 제목
+        
+    Returns:
+        str: 변경사항의 고유 해시
+    """
+    # 변경사항을 정렬하여 일관된 해시 생성
+    sorted_issues = sorted(changed_issues, key=lambda x: x['key'])
+    change_data = {
+        'page_title': page_title,
+        'issues': [(issue['key'], issue['summary']) for issue in sorted_issues]
+    }
+    return json.dumps(change_data, sort_keys=True, ensure_ascii=False)
 
 def get_slack_user_id_by_email(email):
     """
@@ -557,13 +630,17 @@ def main():
     SNAPSHOT_FILE_PATH = 'weekly_issues_snapshot.json'
     prev_snapshot = read_json(SNAPSHOT_FILE_PATH)
     curr_snapshot = snapshot_issues(issues, "customfield_10817")
-    if not issues_changed(prev_snapshot, curr_snapshot):
-        print(f"JIRA 이슈 변경 없음. 업데이트/알림 생략. {get_now_str()}")
-        log(f"실행시간: {get_now_str()}\n업데이트 할 사항 없음.")
-        return
-
-    # 변경된 IT티켓 목록 추출
-    changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
+    
+    # create 모드에서는 이슈 변경 여부와 관계없이 페이지 생성/업데이트 진행
+    if mode == "create":
+        changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
+    else:
+        # update 모드에서만 이슈 변경 감지
+        if not issues_changed(prev_snapshot, curr_snapshot):
+            print(f"JIRA 이슈 변경 없음. 업데이트/알림 생략. {get_now_str()}")
+            log(f"\n실행시간: {get_now_str()}\n업데이트 할 사항 없음.")
+            return
+        changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
 
     # 6. Confluence 페이지 생성/업데이트 및 Slack 알림
     page_content = create_confluence_content(jql_query, issues, atlassian_url)
@@ -579,15 +656,28 @@ def main():
                     parent_id=parent_page_id, type='page', representation='storage'
                 )
                 print(f"'{page_title}' 페이지 업데이트 완료.")
-                # 변경된 IT티켓 목록을 슬랙 메시지에 포함
-                if changed_issues:
+                
+                # 중복 알림 방지를 위한 변경사항 해시 확인
+                notified_changes = get_notified_changes()
+                change_hash = generate_change_hash(changed_issues, page_title)
+                
+                # 변경사항이 있고, 아직 알림을 보내지 않은 경우에만 Slack 알림 전송
+                if changed_issues and change_hash not in notified_changes:
                     issue_list = '\n'.join([
                         f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
                     ])
-                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                    send_slack(slack_msg)
+                    # 알림을 보낸 변경사항 해시를 저장
+                    notified_changes.add(change_hash)
+                    save_notified_changes(notified_changes)
+                    print(f"Slack 알림 전송 완료 (변경사항: {len(changed_issues)}개)")
+                elif changed_issues:
+                    print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {len(changed_issues)}개)")
                 else:
-                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}"
-                send_slack(slack_msg)
+                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
+                    send_slack(slack_msg)
+                
                 notify_new_deploy_tickets(issues, atlassian_url, page_title)
                 log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 업데이트.")
             else:
@@ -601,14 +691,32 @@ def main():
             print("✅ Confluence 페이지 생성 완료!")
             page_id = confluence.get_page_id(space=confluence_space_key, title=page_title)
             page_url = f"{atlassian_url}/wiki/spaces/{confluence_space_key}/pages/{page_id}"
-            # 생성 시에는 전체 목록 표시
-            issue_list = '\n'.join([
-                f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
-            ])
-            slack_msg = f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
-            send_slack(slack_msg)
+            
+            # 중복 알림 방지를 위한 변경사항 해시 확인
+            notified_changes = get_notified_changes()
+            change_hash = generate_change_hash(changed_issues, page_title)
+            
+            # 변경사항이 있고, 아직 알림을 보내지 않은 경우에만 Slack 알림 전송
+            if changed_issues and change_hash not in notified_changes:
+                issue_list = '\n'.join([
+                    f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
+                ])
+                slack_msg = f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                send_slack(slack_msg)
+                # 알림을 보낸 변경사항 해시를 저장
+                notified_changes.add(change_hash)
+                save_notified_changes(notified_changes)
+                print(f"Slack 알림 전송 완료 (변경사항: {len(changed_issues)}개)")
+            elif changed_issues:
+                print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {len(changed_issues)}개)")
+                slack_msg = f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}"
+                send_slack(slack_msg)
+            else:
+                slack_msg = f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}"
+                send_slack(slack_msg)
+            
             notify_new_deploy_tickets(issues, atlassian_url, page_title)
-            log(f"실행시간: {get_now_str()}\n내용: {page_title} 페이지 생성.")
+            log(f"\n실행시간: {get_now_str()}\n내용: {page_title} 페이지 생성.")
     except Exception as e:
         print(f"Confluence 페이지 처리 오류: {e}")
 
