@@ -376,8 +376,8 @@ def get_slack_user_id_by_email(email):
 
 def notify_new_deploy_tickets(issues, jira_url, page_title):
     """
-    새롭게 연결된 배포 티켓이 있을 경우, 부모 티켓의 담당자와 승인자에게 Slack 알림을 보냅니다.
-    'is deployed by' 관계로 연결된 배포 티켓을 감지합니다.
+    새롭게 연결된 배포 티켓이 있을 경우, 부모 티켓별로 그룹화하여 Slack 알림을 보냅니다.
+    'is deployed by' 관계로 연결된 배포 티켓을 감지하고, 각 배포 티켓의 상태를 포함한 상세한 알림을 생성합니다.
 
     Args:
         issues (list): 주간 리포트에 포함된 부모 이슈 리스트
@@ -391,24 +391,25 @@ def notify_new_deploy_tickets(issues, jira_url, page_title):
     # 고정된 승인자들의 이메일 주소입니다.
     approver_emails = {
         "eunbee@deali.net": "조은비",
-        "soyoun@deali.net": "박소연"
+        # "soyoun@deali.net": "박소연"
     }
     
     # Slack API를 통해 승인자들의 Slack ID를 미리 조회하여 멘션을 준비합니다.
     eunbee_id = get_slack_user_id_by_email("eunbee@deali.net")
-    soyoun_id = get_slack_user_id_by_email("soyoun@deali.net")
+    # soyoun_id = get_slack_user_id_by_email("soyoun@deali.net")
     
     # Slack ID가 있으면 <@U12345678> 형식의 멘션 문자열을, 없으면 실명을 사용합니다.
     eunbee_mention = f"<@{eunbee_id}>" if eunbee_id else "조은비"
-    soyoun_mention = f"<@{soyoun_id}>" if soyoun_id else "박소연"
+    # soyoun_mention = f"<@{soyoun_id}>" if soyoun_id else "박소연"
 
     # 부모 티켓별로 알림을 그룹화하여 한 번에 보내기 위한 딕셔너리입니다.
-    # 구조: { "부모티켓_키": {"담당자_멘션": "...", "새로운_배포티켓_리스트": [...]}}
+    # 구조: { "부모티켓_키": {"부모티켓_정보": {...}, "배포티켓_리스트": [...]}}
     notifications_by_parent_ticket = {}
 
     # 1. 주간 리포트에 포함된 각 부모 티켓을 순회하며 새로운 배포 티켓 연결을 확인합니다.
     for parent_issue in issues:
         parent_key = parent_issue['key']
+        parent_summary = parent_issue['fields'].get('summary', '')
         
         newly_linked_deploys = []
         # 'issuelinks' 필드에서 'is deployed by' 관계를 가진 링크를 찾습니다.
@@ -420,46 +421,77 @@ def notify_new_deploy_tickets(issues, jira_url, page_title):
                     
                     # 이 배포 티켓에 대해 알림을 보낸 적이 없는 경우에만 처리합니다.
                     if deploy_ticket_key not in notified_keys:
-                        newly_linked_deploys.append(deploy_ticket_key)
-                        new_notified_keys.add(deploy_ticket_key) # 알림 목록에 추가
+                        # 배포 티켓의 상세 정보를 가져옵니다.
+                        try:
+                            resp = requests.get(f"{jira_url}/rest/api/2/issue/{deploy_ticket_key}",
+                                auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
+                            if resp.status_code == 200:
+                                deploy_ticket_detail = resp.json()
+                                deploy_summary = deploy_ticket_detail['fields'].get('summary', '')
+                                deploy_status = deploy_ticket_detail['fields'].get('status', {}).get('name', '')
+                                
+                                newly_linked_deploys.append({
+                                    'key': deploy_ticket_key,
+                                    'summary': deploy_summary,
+                                    'status': deploy_status
+                                })
+                                new_notified_keys.add(deploy_ticket_key) # 알림 목록에 추가
+                        except Exception as e:
+                            print(f"배포 티켓 {deploy_ticket_key} 상세 정보 조회 실패: {e}")
+                            # 상세 정보 조회에 실패해도 기본 정보로 알림을 보냅니다.
+                            newly_linked_deploys.append({
+                                'key': deploy_ticket_key,
+                                'summary': deploy_ticket.get('fields', {}).get('summary', ''),
+                                'status': deploy_ticket.get('fields', {}).get('status', {}).get('name', '')
+                            })
+                            new_notified_keys.add(deploy_ticket_key)
         
         # 새로 연결된 배포 티켓이 있는 경우에만 알림 데이터를 구성합니다.
         if newly_linked_deploys:
-            assignee = parent_issue.get('fields', {}).get('assignee')
-            if not assignee:
-                continue # 담당자가 없으면 알림을 보낼 수 없으므로 건너뜁니다.
-
-            # 담당자의 이메일, 이름 정보를 가져옵니다.
-            assignee_email = assignee.get('emailAddress')
-            assignee_name = assignee.get('displayName') or assignee.get('name')
-            assignee_mention = assignee_name or '담당자' # 기본값 설정
-            
-            # 이메일이 있으면 Slack ID를 조회하여 멘션 문자열을 만듭니다。
-            if assignee_email:
-                slack_user_id = get_slack_user_id_by_email(assignee_email)
-                if slack_user_id:
-                    assignee_mention = f"<@{slack_user_id}>"
-            
-            # 알림 그룹화 딕셔너리에 추가합니다.
             notifications_by_parent_ticket[parent_key] = {
-                'assignee_mention': assignee_mention,
-                'new_deploys': newly_linked_deploys
+                'parent_summary': parent_summary,
+                'assignee': parent_issue.get('fields', {}).get('assignee', {}),
+                'deploy_tickets': newly_linked_deploys
             }
 
-    # 2. 그룹화된 알림 정보를 바탕으로 실제 Slack 메시지를 생성하고 전송합니다.
+    # 2. 각 부모 티켓별로 Slack 메시지를 생성하고 전송합니다.
     if notifications_by_parent_ticket:
         for parent_key, data in notifications_by_parent_ticket.items():
-            assignee_mention = data['assignee_mention']
+            parent_summary = data['parent_summary']
+            parent_assignee = data['assignee']
+            deploy_tickets = data['deploy_tickets']
+            
+            # 부모 티켓 담당자 정보
+            assignee_mention = '담당자'
+            if parent_assignee:
+                assignee_name = parent_assignee.get('displayName') or parent_assignee.get('name')
+                assignee_email = parent_assignee.get('emailAddress')
+                assignee_mention = assignee_name or '담당자'
+                
+                # 이메일이 있으면 Slack ID를 조회하여 멘션 문자열을 만듭니다.
+                if assignee_email:
+                    slack_user_id = get_slack_user_id_by_email(assignee_email)
+                    if slack_user_id:
+                        assignee_mention = f"<@{slack_user_id}>"
+            
+            # 부모 티켓 URL
             parent_url = f"{jira_url}/browse/{parent_key}"
-            parent_summary = ''
-            # IT 티켓 제목 추출 (없으면 빈 문자열)
-            if parent_key in [i['key'] for i in issues]:
-                parent_summary = issues[[i['key'] for i in issues].index(parent_key)]['fields'].get('summary', '')
+            
+            # 배포 티켓 목록 생성
+            deploy_tickets_list = []
+            for i, deploy_ticket in enumerate(deploy_tickets, 1):
+                deploy_url = f"{jira_url}/browse/{deploy_ticket['key']}"
+                deploy_ticket_text = f"{deploy_ticket['key']}({deploy_ticket['status']}): {deploy_ticket['summary']}"
+                deploy_tickets_list.append(
+                    f"{i}. <{deploy_url}|{deploy_ticket_text}>"
+                )
+            
             # Slack 메시지 내용을 구성합니다.
             message = (
                 f"{assignee_mention}님, 담당 IT티켓에 새로운 배포 티켓이 생성되었습니다.\n"
                 f"{eunbee_mention}님, 배포 내용을 확인 후 승인해주세요.\n"
-                f"- <{parent_url}|{parent_key}: {parent_summary}>"
+                f"**<{parent_url}|{parent_key}: {parent_summary}>**\n"
+                f"{chr(10).join(deploy_tickets_list)}"
             )
             send_slack(message)
 
@@ -552,7 +584,7 @@ def get_changed_issues(prev, curr, jira_url):
     """
     이전 스냅샷(prev)과 현재 스냅샷(curr)을 비교하여 변경된 IT티켓 목록을 반환합니다.
     - 새로 추가된 티켓
-    - 주요 정보(제목, 담당자, 상태, 배포일 등)가 변경된 티켓
+    - deploy_date(배포 예정일)가 변경된 티켓만 감지
     Args:
         prev (list): 이전 스냅샷
         curr (list): 현재 스냅샷
@@ -573,15 +605,13 @@ def get_changed_issues(prev, curr, jira_url):
                 'url': f"{jira_url}/browse/{key}"
             })
         else:
-            # 주요 정보 변경 여부 확인
-            for field in ['summary', 'assignee', 'status', 'deploy_date']:
-                if curr_issue.get(field) != prev_issue.get(field):
-                    changed.append({
-                        'key': key,
-                        'summary': curr_issue.get('summary', ''),
-                        'url': f"{jira_url}/browse/{key}"
-                    })
-                    break
+            # deploy_date만 변경 여부 확인
+            if curr_issue.get('deploy_date') != prev_issue.get('deploy_date'):
+                changed.append({
+                    'key': key,
+                    'summary': curr_issue.get('summary', ''),
+                    'url': f"{jira_url}/browse/{key}"
+                })
     return changed
 
 def main():
