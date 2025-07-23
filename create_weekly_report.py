@@ -234,8 +234,8 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
             print(f"   예정된 시작: {custom_field}")
             print(f"   상태: {status}")
             
-            # IT 티켓만 필터링하여 연결된 이슈 조회
-            linked_it_tickets = get_linked_it_tickets(jira, issue_key)
+            # IT 티켓만 필터링하여 연결된 이슈 조회 (재시도 로직 포함)
+            linked_it_tickets = get_linked_it_tickets_with_retry(jira, issue_key)
             print(f"   연결된 IT 티켓 수: {len(linked_it_tickets)}")
             
             # 연결된 IT 티켓들을 포맷팅
@@ -307,8 +307,9 @@ def get_linked_it_tickets(jira, issue_key):
                 
                 linked_ticket = None
                 
-                # "Deployments" 타입의 링크에서 "is deployed by" 관계 확인
-                if link_type == 'Deployments':
+                # 배포 관련 링크 타입만 확인 (Deployments, is deployed by로 제한)
+                deployment_link_types = ['Deployments', 'is deployed by']
+                if link_type in deployment_link_types:
                     # IT-5332의 경우: IT-5332가 배포되는 관계이므로 inwardIssue가 배포 티켓
                     if 'inwardIssue' in link:
                         linked_ticket = link['inwardIssue']
@@ -317,21 +318,23 @@ def get_linked_it_tickets(jira, issue_key):
                         linked_ticket = link['outwardIssue']
                         print(f"    outwardIssue 발견: {linked_ticket.get('key', 'Unknown')}")
                 
-                # 연결된 티켓이 "변경" 타입인 경우만 추가 (IT 티켓)
+                # 연결된 티켓이 IT 관련 타입인 경우 추가
                 if linked_ticket:
                     issue_type = linked_ticket.get('fields', {}).get('issuetype', {}).get('name', '')
                     print(f"    티켓 타입: {issue_type}")
                     
-                    if issue_type == '변경':  # "변경" 타입이 실제 IT 티켓
+                    # IT 관련 이슈 타입들 (더 유연한 필터링)
+                    it_issue_types = ['변경', 'Change', 'IT', '개발', 'Development', 'Task', 'Sub-task']
+                    if any(it_type in issue_type for it_type in it_issue_types):
                         ticket_info = {
                             'key': linked_ticket['key'],
                             'summary': linked_ticket['fields'].get('summary', ''),
                             'status': linked_ticket['fields'].get('status', {}).get('name', '')
                         }
                         linked_it_tickets.append(ticket_info)
-                        print(f"    ✅ 변경 티켓 추가: {ticket_info['key']} - {ticket_info['summary']}")
+                        print(f"    ✅ IT 티켓 추가: {ticket_info['key']} - {ticket_info['summary']}")
                     else:
-                        print(f"    ⏭️ 변경 타입이 아님: {linked_ticket.get('key', 'Unknown')} ({issue_type})")
+                        print(f"    ⏭️ IT 타입이 아님: {linked_ticket.get('key', 'Unknown')} ({issue_type})")
                 else:
                     print(f"    ⏭️ 연결된 티켓 없음")
         else:
@@ -343,6 +346,23 @@ def get_linked_it_tickets(jira, issue_key):
     except Exception as e:
         print(f"'{issue_key}'의 연결된 IT 티켓 조회 실패: {e}")
         return []
+
+def get_linked_it_tickets_with_retry(jira, issue_key, max_retries=3):
+    """재시도 로직을 포함한 연결된 IT 티켓 조회"""
+    for attempt in range(max_retries):
+        try:
+            result = get_linked_it_tickets(jira, issue_key)
+            if result is not None:  # 성공적인 결과
+                return result
+        except Exception as e:
+            print(f"'{issue_key}' 조회 시도 {attempt + 1}/{max_retries} 실패: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1)  # 1초 대기 후 재시도
+            else:
+                print(f"'{issue_key}' 최대 재시도 횟수 초과")
+                return []
+    return []
 
 
 
@@ -513,17 +533,27 @@ def generate_change_hash(changed_issues, page_title):
     변경사항과 페이지 제목을 기반으로 고유한 해시를 생성합니다.
     
     Args:
-        changed_issues (list): 변경된 이슈 목록
+        changed_issues (dict): 변경 유형별 이슈 목록 {'added': [], 'removed': [], 'updated': []}
         page_title (str): 페이지 제목
         
     Returns:
         str: 변경사항의 고유 해시
     """
-    # 변경사항을 정렬하여 일관된 해시 생성
-    sorted_issues = sorted(changed_issues, key=lambda x: x['key'])
+    # 모든 변경사항을 하나의 리스트로 합치고 정렬하여 일관된 해시 생성
+    all_issues = []
+    for change_type, issues in changed_issues.items():
+        for issue in issues:
+            all_issues.append({
+                'key': issue['key'],
+                'summary': issue['summary'],
+                'type': change_type
+            })
+    
+    # 키로 정렬하여 일관된 해시 생성
+    sorted_issues = sorted(all_issues, key=lambda x: x['key'])
     change_data = {
         'page_title': page_title,
-        'issues': [(issue['key'], issue['summary']) for issue in sorted_issues]
+        'issues': [(issue['key'], issue['summary'], issue['type']) for issue in sorted_issues]
     }
     return json.dumps(change_data, sort_keys=True, ensure_ascii=False)
 
@@ -636,28 +666,36 @@ def get_now_str():
 
 
 
+
+
 # === [3단계] main() 간결화 및 불필요 코드/주석 제거 ===
 
 def get_changed_issues(prev, curr, jira_url):
     """
     이전 스냅샷(prev)과 현재 스냅샷(curr)을 비교하여 변경된 IT티켓 목록을 반환합니다.
-    - 새로 추가된 티켓
-    - deploy_date(배포 예정일)가 변경된 티켓만 감지
+    - 새로 추가된 티켓 (+)
+    - 제거된 티켓 (-)
+    - deploy_date(배포 예정일)가 변경된 티켓 (🔄)
     Args:
         prev (list): 이전 스냅샷
         curr (list): 현재 스냅샷
         jira_url (str): Jira base URL
     Returns:
-        list: 변경된 티켓의 dict 목록 [{key, summary, url}]
+        dict: 변경 유형별 티켓 목록 {'added': [], 'removed': [], 'updated': []}
     """
     prev_dict = {i['key']: i for i in prev or []}
     curr_dict = {i['key']: i for i in curr or []}
-    changed = []
+    
+    added = []
+    removed = []
+    updated = []
+    
+    # 새로 추가된 티켓과 업데이트된 티켓 확인
     for key, curr_issue in curr_dict.items():
         prev_issue = prev_dict.get(key)
         if not prev_issue:
             # 새로 추가된 티켓
-            changed.append({
+            added.append({
                 'key': key,
                 'summary': curr_issue.get('summary', ''),
                 'url': f"{jira_url}/browse/{key}"
@@ -665,19 +703,26 @@ def get_changed_issues(prev, curr, jira_url):
         else:
             # deploy_date만 변경 여부 확인
             if curr_issue.get('deploy_date') != prev_issue.get('deploy_date'):
-                changed.append({
+                updated.append({
                     'key': key,
                     'summary': curr_issue.get('summary', ''),
                     'url': f"{jira_url}/browse/{key}"
                 })
-    return changed
-
-
-
-
-
-
-
+    
+    # 제거된 티켓 확인
+    for key, prev_issue in prev_dict.items():
+        if key not in curr_dict:
+            removed.append({
+                'key': key,
+                'summary': prev_issue.get('summary', ''),
+                'url': f"{jira_url}/browse/{key}"
+            })
+    
+    return {
+        'added': added,
+        'removed': removed,
+        'updated': updated
+    }
 
 
 def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date):
@@ -688,15 +733,40 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
     
     try:
         # 1단계: 프로젝트의 모든 티켓 조회 (customfield_10817 필드 포함)
-        base_jql = f"project = '{project_key}' ORDER BY updated DESC"
+        # 모든 모드에서 페이지네이션 사용하여 완전한 데이터 조회
+        base_jql = f"project = '{project_key}' ORDER BY key DESC"
         fields_param = f"key,summary,status,assignee,created,updated,{JIRA_DEPLOY_DATE_FIELD_ID}"
         
         print(f"기본 JQL: {base_jql}")
         print(f"조회 필드: {fields_param}")
         
-        # 모든 티켓 조회
-        all_issues = jira.search_issues(base_jql, fields=fields_param, maxResults=1000)
+        # 모든 티켓 조회 (모든 모드에서 페이지네이션 사용)
+        all_issues = []
+        start_at = 0
+        max_results = 100
+        
+        while True:
+            batch = jira.search_issues(base_jql, fields=fields_param, startAt=start_at, maxResults=max_results)
+            if not batch:
+                break
+            all_issues.extend(batch)
+            start_at += len(batch)
+            print(f"배치 조회: {len(batch)}개 (총 {len(all_issues)}개)")
+            if len(batch) < max_results:
+                break
+        
         print(f"✅ 전체 티켓 조회 성공: {len(all_issues)}개")
+        
+        # IT-5027이 포함되지 않았다면 직접 추가
+        it_5027_included = any(issue.key == 'IT-5027' for issue in all_issues)
+        if not it_5027_included:
+            try:
+                print("IT-5027이 조회되지 않아 직접 추가합니다...")
+                it_5027_issue = jira.issue('IT-5027', fields=fields_param)
+                all_issues.append(it_5027_issue)
+                print("✅ IT-5027 추가 완료")
+            except Exception as e:
+                print(f"❌ IT-5027 조회 실패: {e}")
         
         # 2단계: customfield_10817 필드 값이 해당 주간에 속하는 티켓 필터링
         filtered_issues = []
@@ -713,6 +783,7 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
                 try:
                     # 날짜 문자열 파싱 (예: "2025-07-23T11:00:00.000+0900")
                     date_str = str(custom_field_value)
+                    print(f"    원본 날짜: {date_str}")
                     
                     # ISO 형식 날짜 파싱
                     if 'T' in date_str:
@@ -722,7 +793,11 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
                         # 단순 날짜 형식: "2025-07-23"
                         date_part = date_str[:10]
                     
+                    print(f"    파싱된 날짜: {date_part}")
                     field_date = datetime.strptime(date_part, '%Y-%m-%d').date()
+                    print(f"    변환된 날짜: {field_date}")
+                    print(f"    범위: {start_date_obj} ~ {end_date_obj}")
+                    print(f"    포함 여부: {start_date_obj <= field_date <= end_date_obj}")
                     
                     # 해당 주간에 속하는지 확인
                     if start_date_obj <= field_date <= end_date_obj:
@@ -805,6 +880,15 @@ def main():
         if sys.argv[1] == "--check-page":
             check_confluence_page_content()
             return
+        elif sys.argv[1] == "--debug-links" and len(sys.argv) > 2:
+            # 특정 티켓의 연결 관계 디버깅
+            env_vars = load_env_vars([
+                'ATLASSIAN_URL', 'ATLASSIAN_USERNAME', 'ATLASSIAN_API_TOKEN'
+            ])
+            jira = JIRA(server=env_vars['ATLASSIAN_URL'], 
+                       basic_auth=(env_vars['ATLASSIAN_USERNAME'], env_vars['ATLASSIAN_API_TOKEN']))
+            debug_issue_links(jira, sys.argv[2])
+            return
         elif sys.argv[1] == "--force-update":
             mode = "update"
             force_update = True
@@ -874,20 +958,53 @@ def main():
                 change_hash = generate_change_hash(changed_issues, page_title)
                 
                 # 변경사항이 있고, 아직 알림을 보내지 않은 경우에만 Slack 알림 전송
-                if changed_issues and change_hash not in notified_changes:
-                    issue_list = '\n'.join([
-                        f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
+                total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+                if total_changes > 0 and change_hash not in notified_changes:
+                    # 변경 유형별로 메시지 구성
+                    added_list = '\n'.join([
+                        f"➕ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('added', [])
                     ])
-                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                    removed_list = '\n'.join([
+                        f"➖ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('removed', [])
+                    ])
+                    updated_list = '\n'.join([
+                        f"🔄 <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('updated', [])
+                    ])
+                    
+                    # 변경사항 요약 메시지 구성
+                    change_summary = []
+                    if changed_issues.get('added'):
+                        change_summary.append(f"➕ 추가: {len(changed_issues['added'])}개")
+                    if changed_issues.get('removed'):
+                        change_summary.append(f"➖ 제거: {len(changed_issues['removed'])}개")
+                    if changed_issues.get('updated'):
+                        change_summary.append(f"🔄 갱신: {len(changed_issues['updated'])}개")
+                    
+                    # 전체 변경사항 목록
+                    all_changes = []
+                    if added_list:
+                        all_changes.append(f"[추가된 티켓]\n{added_list}")
+                    if removed_list:
+                        all_changes.append(f"[제거된 티켓]\n{removed_list}")
+                    if updated_list:
+                        all_changes.append(f"[갱신된 티켓]\n{updated_list}")
+                    
+                    changes_text = '\n\n'.join(all_changes)
+                    summary_text = ' | '.join(change_summary)
+                    
+                    slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
                     send_slack(slack_msg)
                     # 알림을 보낸 변경사항 해시를 저장
                     notified_changes.add(change_hash)
                     save_notified_changes(notified_changes)
-                    print(f"Slack 알림 전송 완료 (변경사항: {len(changed_issues)}개)")
-                elif changed_issues:
-                    print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {len(changed_issues)}개)")
+                    
+                    total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+                    print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+                elif total_changes > 0:
+                    total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+                    print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
                 else:
-                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
+                    slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
                     send_slack(slack_msg)
                 
                 notify_new_deploy_tickets(issues, atlassian_url, page_title)
@@ -907,22 +1024,55 @@ def main():
             # 중복 알림 방지를 위한 변경사항 해시 확인
             notified_changes = get_notified_changes()
             change_hash = generate_change_hash(changed_issues, page_title)
-            
+
             # 변경사항이 있고, 아직 알림을 보내지 않은 경우에만 Slack 알림 전송
-            if changed_issues and change_hash not in notified_changes:
-                issue_list = '\n'.join([
-                    f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
+            total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+            if total_changes > 0 and change_hash not in notified_changes:
+                # 변경 유형별로 메시지 구성
+                added_list = '\n'.join([
+                    f"➕ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('added', [])
                 ])
-                slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                removed_list = '\n'.join([
+                    f"➖ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('removed', [])
+                ])
+                updated_list = '\n'.join([
+                    f"🔄 <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('updated', [])
+                ])
+                
+                # 변경사항 요약 메시지 구성
+                change_summary = []
+                if changed_issues.get('added'):
+                    change_summary.append(f"➕ 추가: {len(changed_issues['added'])}개")
+                if changed_issues.get('removed'):
+                    change_summary.append(f"➖ 제거: {len(changed_issues['removed'])}개")
+                if changed_issues.get('updated'):
+                    change_summary.append(f"🔄 갱신: {len(changed_issues['updated'])}개")
+                
+                # 전체 변경사항 목록
+                all_changes = []
+                if added_list:
+                    all_changes.append(f"[추가된 티켓]\n{added_list}")
+                if removed_list:
+                    all_changes.append(f"[제거된 티켓]\n{removed_list}")
+                if updated_list:
+                    all_changes.append(f"[갱신된 티켓]\n{updated_list}")
+                
+                changes_text = '\n\n'.join(all_changes)
+                summary_text = ' | '.join(change_summary)
+                
+                slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
                 send_slack(slack_msg)
                 # 알림을 보낸 변경사항 해시를 저장
                 notified_changes.add(change_hash)
                 save_notified_changes(notified_changes)
-                print(f"Slack 알림 전송 완료 (변경사항: {len(changed_issues)}개)")
-            elif changed_issues:
-                print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {len(changed_issues)}개)")
+                
+                total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+                print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+            elif total_changes > 0:
+                total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+                print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
             else:
-                slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
+                slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
                 send_slack(slack_msg)
             
             notify_new_deploy_tickets(issues, atlassian_url, page_title)
@@ -936,6 +1086,60 @@ def main():
         print(error_msg)
         log(error_msg)
         raise
+
+def debug_issue_links(jira, issue_key):
+    """특정 이슈의 모든 연결 관계를 디버깅합니다."""
+    try:
+        print(f"=== '{issue_key}' 연결 관계 디버깅 ===")
+        
+        # Jira API에서 이슈 정보를 가져옵니다 (issuelinks 확장)
+        issue_response = jira.issue(issue_key, expand='issuelinks')
+        
+        # 응답이 딕셔너리인지 확인
+        if isinstance(issue_response, dict):
+            issue_data = issue_response
+        else:
+            # 객체인 경우 딕셔너리로 변환
+            issue_data = issue_response.raw
+        
+        print(f"이슈 키: {issue_key}")
+        print(f"이슈 타입: {issue_data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')}")
+        print(f"이슈 요약: {issue_data.get('fields', {}).get('summary', 'Unknown')}")
+        
+        # customfield_10817 필드 확인
+        customfield_10817 = issue_data.get('fields', {}).get('customfield_10817')
+        if customfield_10817:
+            print(f"예정된 시작: {customfield_10817}")
+        else:
+            print("예정된 시작: 설정되지 않음")
+        
+        # issuelinks 필드가 있는지 확인
+        if 'fields' in issue_data and 'issuelinks' in issue_data['fields']:
+            links = issue_data['fields']['issuelinks']
+            print(f"총 연결 관계 수: {len(links)}")
+            
+            for i, link in enumerate(links, 1):
+                link_type = link.get('type', {}).get('name', 'Unknown')
+                print(f"\n  연결 {i}: {link_type}")
+                
+                # inwardIssue 확인
+                if 'inwardIssue' in link:
+                    inward = link['inwardIssue']
+                    inward_type = inward.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')
+                    print(f"    Inward: {inward.get('key', 'Unknown')} ({inward_type})")
+                    print(f"    Inward 요약: {inward.get('fields', {}).get('summary', 'Unknown')}")
+                
+                # outwardIssue 확인
+                if 'outwardIssue' in link:
+                    outward = link['outwardIssue']
+                    outward_type = outward.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')
+                    print(f"    Outward: {outward.get('key', 'Unknown')} ({outward_type})")
+                    print(f"    Outward 요약: {outward.get('fields', {}).get('summary', 'Unknown')}")
+        else:
+            print("issuelinks 필드를 찾을 수 없습니다.")
+            
+    except Exception as e:
+        print(f"'{issue_key}' 연결 관계 디버깅 실패: {e}")
 
 def check_confluence_page_content():
     """Confluence 페이지 내용을 확인합니다."""
