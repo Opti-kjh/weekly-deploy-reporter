@@ -82,5 +82,29 @@
   {
     "issue": "IT-6683",
     "deployedBy": []
+  },
+  {
+    "issue": "IT-6833",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6727",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6473",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6369",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6490",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-4960",
+    "deployedBy": []
   }
 ]
