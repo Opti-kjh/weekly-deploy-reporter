@@ -1,151 +1,86 @@
 [
   {
-    "issue": "IT-6487",
+    "issue": "IT-6757",
     "deployedBy": []
   },
   {
-    "issue": "IT-6492",
-    "deployedBy": [
-      "IT-6525"
-    ]
-  },
-  {
-    "issue": "IT-6471",
-    "deployedBy": [
-      "DBA-985",
-      "IT-6528",
-      "IT-6535"
-    ]
-  },
-  {
-    "issue": "IT-6469",
+    "issue": "IT-6761",
     "deployedBy": []
   },
   {
-    "issue": "IT-6467",
-    "deployedBy": [
-      "IT-6526"
-    ]
-  },
-  {
-    "issue": "IT-6437",
-    "deployedBy": [
-      "IT-6527",
-      "IT-6613",
-      "IT-6644"
-    ]
-  },
-  {
-    "issue": "IT-6433",
+    "issue": "IT-6760",
     "deployedBy": []
   },
   {
-    "issue": "IT-6428",
-    "deployedBy": [
-      "IT-6530"
-    ]
-  },
-  {
-    "issue": "IT-6420",
+    "issue": "IT-6744",
     "deployedBy": []
   },
   {
-    "issue": "IT-6373",
-    "deployedBy": [
-      "IT-6530"
-    ]
-  },
-  {
-    "issue": "IT-5628",
-    "deployedBy": [
-      "IT-6514",
-      "IT-6518",
-      "IT-6530"
-    ]
-  },
-  {
-    "issue": "IT-4319",
-    "deployedBy": [
-      "IT-5001",
-      "IT-6499",
-      "IT-6501",
-      "IT-6502",
-      "IT-6503",
-      "IT-6505",
-      "IT-6508",
-      "IT-6509",
-      "IT-6554",
-      "IT-6557",
-      "IT-6564",
-      "IT-6567",
-      "IT-6568",
-      "IT-6578",
-      "IT-6597",
-      "IT-6627",
-      "IT-6654"
-    ]
-  },
-  {
-    "issue": "IT-5705",
-    "deployedBy": [
-      "IT-6504",
-      "IT-6513",
-      "IT-6555",
-      "IT-6589"
-    ]
-  },
-  {
-    "issue": "IT-4702",
-    "deployedBy": [
-      "IT-6506",
-      "IT-6511",
-      "IT-6512",
-      "IT-6515",
-      "IT-6522",
-      "IT-6539",
-      "IT-6530",
-      "IT-6542",
-      "IT-6536",
-      "IT-6588",
-      "IT-6589",
-      "IT-6650"
-    ]
-  },
-  {
-    "issue": "IT-4424",
-    "deployedBy": [
-      "IT-6506",
-      "IT-6511",
-      "IT-6590",
-      "IT-6605",
-      "IT-6606",
-      "IT-6650"
-    ]
-  },
-  {
-    "issue": "IT-6595",
-    "deployedBy": [
-      "IT-6596"
-    ]
-  },
-  {
-    "issue": "IT-6623",
+    "issue": "IT-6731",
     "deployedBy": []
   },
   {
-    "issue": "IT-6632",
+    "issue": "IT-6730",
     "deployedBy": []
   },
   {
-    "issue": "IT-6640",
+    "issue": "IT-6701",
     "deployedBy": []
   },
   {
-    "issue": "IT-6641",
+    "issue": "IT-6698",
     "deployedBy": []
   },
   {
-    "issue": "IT-6651",
+    "issue": "IT-6690",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6635",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6625",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6476",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6719",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6247",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6813",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6609",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-5332",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-3759",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6754",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6747",
+    "deployedBy": []
+  },
+  {
+    "issue": "IT-6683",
     "deployedBy": []
   }
 ]
