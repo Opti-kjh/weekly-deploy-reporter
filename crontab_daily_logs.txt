@@ -1,0 +1,25 @@
+# Weekly Deploy Reporter - Daily Log Management
+# 매일 새로운 로그 파일을 생성하여 관리하는 crontab 설정
+
+# 기존 설정 (15분마다 평일 8-21시)
+# 15,30,45,0 8-21 * * 1-5 /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_weekly_report.py update >> /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron.log 2>&1
+
+# 새로운 설정 (일일 로그 파일 사용)
+# 15,30,45,0 8-21 * * 1-5 /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_daily_log.py
+
+# 설명:
+# - create_daily_log.py 스크립트가 매일 새로운 로그 파일을 자동으로 생성합니다
+# - 로그 파일명 형식: cron_YYMMDD.log (예: cron_250724.log)
+# - 로그 파일 위치: /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/
+# - 실행 시작/종료 시간과 종료 코드가 자동으로 기록됩니다
+# - 오류 발생 시에도 로그 파일에 상세한 오류 정보가 기록됩니다
+
+# 설치 방법:
+# 1. 현재 crontab 확인: crontab -l
+# 2. 기존 설정 제거: crontab -r (주의: 모든 crontab 설정이 삭제됩니다)
+# 3. 새 설정 추가: crontab crontab_daily_logs.txt
+
+# 로그 파일 확인 방법:
+# - 오늘 로그: ls -la /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron_$(date +%y%m%d).log
+# - 최근 로그들: ls -la /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron_*.log
+# - 로그 내용 확인: tail -f /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron_$(date +%y%m%d).log 

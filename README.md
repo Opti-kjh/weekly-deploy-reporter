@@ -28,7 +28,13 @@ weekly-deploy-reporter/
 ├── weekly_issues_snapshot.json # 이슈 스냅샷
 ├── notified_deploy_keys.json   # 알림 전송된 배포 키
 ├── notified_changes.json       # 알림 전송된 변경사항
-├── cron.log                   # 실행 로그
+├── create_daily_log.py        # 일일 로그 생성 스크립트
+├── log_manager.py             # 로그 관리 유틸리티
+├── crontab_new_setting.txt    # 새로운 crontab 설정
+├── DAILY_LOG_SETUP.md         # 일일 로그 시스템 가이드
+├── logs/runtime/              # 일일 로그 파일 디렉토리
+│   └── cron_YYMMDD.log        # 날짜별 로그 파일
+├── cron.log                   # 기존 실행 로그 (레거시)
 ├── cron_test.log              # 테스트 실행 로그
 ├── tests/                     # 테스트 코드
 │   └── test_create_weekly_report.py
@@ -105,6 +111,10 @@ python create_weekly_report.py current
 # 지난 주 배포 예정 티켓으로 리포트 생성/업데이트
 python create_weekly_report.py last
 
+# 페이지네이션 옵션 사용
+python create_weekly_report.py current                   # 페이지네이션 없이 조회 (기본값)
+python create_weekly_report.py create --pagination      # 페이지네이션 사용
+
 # 강제 업데이트 (변경사항 감지 무시)
 python create_weekly_report.py --force-update
 
@@ -119,10 +129,17 @@ python create_weekly_report.py --debug-links IT-5332
 
 | 모드 | 설명 | 대상 기간 | 페이지네이션 |
 |------|------|-----------|-------------|
-| `create` | 다음 주 (차주) 배포 예정 티켓으로 리포트 생성 | 다음 주 | ✅ |
-| `current` | 이번 주 (현재 주) 배포 예정 티켓으로 리포트 생성/업데이트 | 이번 주 | ✅ |
-| `last` | 지난 주 배포 예정 티켓으로 리포트 생성/업데이트 | 지난 주 | ✅ |
-| `update` | 이번 주 배포 예정 티켓으로 리포트 업데이트 (기본값) | 이번 주 | ✅ |
+| `create` | 다음 주 (차주) 배포 예정 티켓으로 리포트 생성 | 다음 주 | 선택적 |
+| `current` | 이번 주 (현재 주) 배포 예정 티켓으로 리포트 생성/업데이트 | 이번 주 | 선택적 |
+| `last` | 지난 주 배포 예정 티켓으로 리포트 생성/업데이트 | 지난 주 | 선택적 |
+| `update` | 이번 주 배포 예정 티켓으로 리포트 업데이트 (기본값) | 이번 주 | 선택적 |
+
+### 페이지네이션 옵션
+
+| 옵션 | 설명 | 기본값 | 권장 사용 |
+|------|------|--------|-----------|
+| `--no-pagination` | 페이지네이션 없이 한 번에 조회 (최대 1000개) | ✅ | 빠른 실행, 소량 데이터 |
+| `--pagination` | 페이지네이션을 사용하여 모든 티켓 조회 (100개씩 배치) | ❌ | 대용량 데이터, 안정성 중시 |
 
 ## 🔧 설정 및 커스터마이징
 
@@ -275,9 +292,46 @@ python create_weekly_report.py --debug-links IT-5332
 
 ## 📈 모니터링
 
-### 로그 파일들
+### 로그 관리 시스템
 
-- `cron.log`: 일반 실행 로그
+이 프로젝트는 일일 로그 파일 관리 시스템을 제공합니다:
+
+#### 일일 로그 파일
+- **파일명 형식**: `cron_YYMMDD.log` (예: `cron_250724.log`)
+- **위치**: `logs/runtime/` 디렉토리
+- **자동 생성**: 매일 새로운 로그 파일 생성
+- **실행 정보**: 시작/종료 시간, 종료 코드, 오류 정보 자동 기록
+
+#### 로그 관리 유틸리티
+```bash
+# 로그 요약 정보 확인
+python3 log_manager.py summary
+
+# 실시간 로그 모니터링
+python3 log_manager.py tail
+
+# 오늘 로그 내용 확인
+python3 log_manager.py today
+
+# 오래된 로그 파일 정리 (30일 이상)
+python3 log_manager.py cleanup
+```
+
+#### Crontab 설정 변경
+기존 설정을 새로운 일일 로그 시스템으로 변경하려면:
+```bash
+# 기존 설정 백업
+crontab -l > crontab_backup.txt
+
+# 새로운 설정 적용
+crontab crontab_new_setting.txt
+```
+
+자세한 설정 방법은 [DAILY_LOG_SETUP.md](DAILY_LOG_SETUP.md)를 참조하세요.
+
+### 기존 로그 파일들
+
+- `cron.log`: 기존 실행 로그 (레거시)
 - `cron_test.log`: 테스트 실행 로그
 - `weekly_issues_snapshot.json`: 이슈 스냅샷
 - `notified_deploy_keys.json`: 알림 전송된 배포 키
@@ -285,19 +339,22 @@ python create_weekly_report.py --debug-links IT-5332
 
 ### 성능 모니터링
 
-- **실행 시간**: 일반적으로 1-3분 (페이지네이션으로 인한 증가)
-- **메모리 사용량**: 약 100-200MB (대용량 데이터 처리)
+- **실행 시간**: 
+  - 페이지네이션 미사용: 1-2분 (빠른 실행, 기본값)
+  - 페이지네이션 사용: 2-5분 (대용량 데이터 처리)
+- **메모리 사용량**: 약 50-200MB (페이지네이션 사용 여부에 따라)
 - **API 호출 횟수**: 
-  - Jira: 10-50회 (페이지네이션으로 인한 증가)
+  - Jira: 1-5회 (페이지네이션 미사용 시, 기본값), 10-50회 (페이지네이션 사용 시)
   - Confluence: 1-2회
 - **조회되는 티켓 수**: 5,000+ 개 (전체 프로젝트)
 
 ### 최적화 사항
 
-- **페이지네이션**: 모든 모드에서 100개씩 배치 조회
+- **페이지네이션**: 선택적 사용 (기본값: 페이지네이션 없음)
 - **재시도 로직**: 연결된 IT 티켓 조회 시 최대 3회 재시도
 - **중복 알림 방지**: 변경사항 해시 기반 중복 방지
 - **시간 제한**: Slack 알림은 8시~21시에만 전송
+- **빠른 실행**: 기본적으로 페이지네이션 없이 빠른 실행
 
 ## 🤝 기여하기
 
@@ -323,4 +380,4 @@ python create_weekly_report.py --debug-links IT-5332
 ---
 
 **마지막 업데이트**: 2025년 7월
-**최신 버전**: 페이지네이션 개선, 배포 예정 목록 HTML 테이블, 연결된 IT 티켓 조회 기능 추가
+**최신 버전**: 선택적 페이지네이션 옵션 추가, 배포 예정 목록 HTML 테이블, 연결된 IT 티켓 조회 기능

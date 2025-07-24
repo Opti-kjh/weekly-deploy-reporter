@@ -1,4 +1,30 @@
 # -*- coding: utf-8 -*-
+"""
+주간 배포 리포트 생성 스크립트
+
+사용법:
+    python create_weekly_report.py [mode] [options]
+    
+모드:
+    current  - 이번 주 배포 예정 티켓으로 리포트 생성/업데이트 (기본값)
+    create   - 다음 주 (차주) 배포 예정 티켓으로 리포트 생성
+    update   - 이번 주 배포 예정 티켓으로 리포트 업데이트
+    last     - 지난 주 배포 예정 티켓으로 리포트 생성/업데이트
+    
+옵션:
+    --no-pagination  - 페이지네이션 없이 한 번에 조회 (기본값, 최대 1000개)
+    --pagination     - 페이지네이션을 사용하여 모든 티켓 조회
+    --force-update   - 강제 업데이트 (변경사항 없어도 업데이트)
+    --check-page     - Confluence 페이지 내용 확인
+    --debug-links [티켓키] - 특정 티켓의 연결 관계 디버깅
+
+예시:
+    python create_weekly_report.py current
+    python create_weekly_report.py create --pagination
+    python create_weekly_report.py update --force-update
+    python create_weekly_report.py --debug-links IT-5027
+"""
+
 # 필요한 외부 라이브러리와 환경 변수들을 불러옵니다.
 import os
 import datetime
@@ -37,20 +63,40 @@ def load_env_vars(keys):
     return values
 
 def get_week_range(mode):
+    """
+    모든 모드에서 동일한 날짜 계산 방식을 사용합니다.
+    해당 주간에 속하는 모든 IT 티켓을 포함하는 것이 목표입니다.
+    """
     today = date.today()
+    
+    # 모든 모드에서 동일한 계산 방식 사용
     if mode == "create":
-        # 다음 주 (차주)
+        # 다음 주 (차주) - 현재 주의 다음 주
         monday = today + timedelta(days=(7 - today.weekday()))
     elif mode == "current":
-        # 이번 주 (현재 주)
+        # 이번 주 (현재 주) - 오늘이 속한 주
         monday = today - timedelta(days=today.weekday())
     elif mode == "last":
-        # 지난 주
+        # 지난 주 - 현재 주의 이전 주
         monday = today - timedelta(days=today.weekday() + 7)
+    elif mode == "update":
+        # 업데이트 모드도 현재 주와 동일
+        monday = today - timedelta(days=today.weekday())
     else:
         # 기본값: 이번 주
         monday = today - timedelta(days=today.weekday())
+    
+    # 일요일은 월요일 + 6일
     sunday = monday + timedelta(days=6)
+    
+    # 디버깅 정보 출력
+    print(f"=== 날짜 계산 디버깅 ===")
+    print(f"모드: {mode}")
+    print(f"현재 날짜: {today}")
+    print(f"계산된 월요일: {monday}")
+    print(f"계산된 일요일: {sunday}")
+    print(f"주간 범위: {monday.strftime('%m/%d')}~{sunday.strftime('%m/%d')}")
+    
     return monday, sunday
 
 def get_page_title(monday, sunday):
@@ -110,7 +156,7 @@ JIRA_CUSTOM_DATE_FORMAT_TEMPLATE = '''
   <ac:parameter ac:name="columns">key,type,summary,assignee,status,created,updated,예정된 시작</ac:parameter>
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
   <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
-  <ac:parameter ac:name="maximumIssues">100</ac:parameter>
+  <ac:parameter ac:name="maximumIssues">1000</ac:parameter>
 </ac:structured-macro>
 '''
 
@@ -123,6 +169,7 @@ DEPLOY_LINKS_MACRO_TEMPLATE = '''
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
   <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
   <ac:parameter ac:name="columnWidths">100,80,300</ac:parameter>
+  <ac:parameter ac:name="maximumIssues">100</ac:parameter>
 </ac:structured-macro>
 '''
 
@@ -167,13 +214,13 @@ def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_dat
 
 
 
-def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_key, start_date_str, end_date_str): 
+def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_key, start_date_str, end_date_str, use_pagination=False): 
     # 날짜 포맷이 적용된 전체 매크로 사용
     macro = JIRA_CUSTOM_DATE_FORMAT_TEMPLATE.format(jql_query=jql_query)
     
     # get_jira_issues_by_customfield_10817 함수를 사용하여 정확한 배포 예정 티켓 조회
     print(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===")
-    deploy_issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str)
+    deploy_issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     
     # IT 티켓만 필터링하는 HTML 테이블 생성 (정확한 결과 사용)
     deploy_links_html_table = create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url)
@@ -366,12 +413,20 @@ def get_linked_it_tickets_with_retry(jira, issue_key, max_retries=3):
 
 
 
-def get_macro_table_issues(jira, jira_project_key, start_date_str, end_date_str):
+def get_macro_table_issues(jira, jira_project_key, start_date_str, end_date_str, use_pagination=False):
     """macro table에 표시될 실제 티켓들을 동적으로 가져옵니다."""
     try:
-        # 다양한 필드로 시도하여 실제 데이터가 있는 필드를 찾습니다
+        print(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===")
+        
+        # customfield_10817 필드를 직접 사용하여 정확한 티켓 조회
+        issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
+        
+        if issues:
+            print(f"macro table용 티켓을 customfield_10817 필드로 조회했습니다.")
+            return issues
+        
+        # customfield_10817에서 데이터를 찾지 못한 경우, 다른 필드로 시도
         date_fields = [
-            JIRA_DEPLOY_DATE_FIELD_ID,  # 예정된 시작
             "created",            # 생성일
             "updated",            # 수정일
             "duedate"             # 마감일
@@ -414,12 +469,12 @@ def send_slack(text):
         print("SLACK_WEBHOOK_URL 미설정, Slack 알림 생략")
         return
     
-    # 오늘은 슬랙 알림 전송하지 않음
-    notification_start_hour = 8
+    # 시간 제한 확인 (8시~21시 사이에만 알림 전송)
+    notification_start_hour =10
     notification_end_hour = 21
     
     today = datetime.now()
-    if today.hour < notification_start_hour or today.hour >= notification_end_hour:  # 지정된 시간에만 알림 전송
+    if today.hour < notification_start_hour or today.hour >= notification_end_hour:
         print(f"현재 시간에는 슬랙 알림 전송을 건너뜁니다. (오전 {notification_start_hour}시 ~ {notification_end_hour}시 외)")
         return
     
@@ -427,6 +482,8 @@ def send_slack(text):
         r = requests.post(url, json={"text": text})
         if r.status_code != 200:
             print(f"Slack 알림 실패: {r.text}")
+        else:
+            print(f"Slack 알림 전송 성공: {len(text)}자")
     except Exception as e:
         print(f"Slack 알림 오류: {e}")
 
@@ -725,48 +782,43 @@ def get_changed_issues(prev, curr, jira_url):
     }
 
 
-def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date):
+def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date, use_pagination=False):
     """customfield_10817 필드 값이 해당 주간에 속하는 모든 티켓을 조회합니다."""
     print(f"=== customfield_10817 직접 조회 시작 ===")
     print(f"프로젝트: {project_key}")
     print(f"대상 기간: {start_date} ~ {end_date}")
+    print(f"페이지네이션 사용: {'예' if use_pagination else '아니오'}")
     
     try:
-        # 1단계: 프로젝트의 모든 티켓 조회 (customfield_10817 필드 포함)
-        # 모든 모드에서 페이지네이션 사용하여 완전한 데이터 조회
-        base_jql = f"project = '{project_key}' ORDER BY key DESC"
+        # 1단계: cf[10817] 형식으로 JQL 쿼리 (Jira 클라우드에서 작동)
+        base_jql = f"project = '{project_key}' AND cf[10817] IS NOT EMPTY ORDER BY created DESC"
         fields_param = f"key,summary,status,assignee,created,updated,{JIRA_DEPLOY_DATE_FIELD_ID}"
         
         print(f"기본 JQL: {base_jql}")
         print(f"조회 필드: {fields_param}")
         
-        # 모든 티켓 조회 (모든 모드에서 페이지네이션 사용)
-        all_issues = []
-        start_at = 0
-        max_results = 100
-        
-        while True:
-            batch = jira.search_issues(base_jql, fields=fields_param, startAt=start_at, maxResults=max_results)
-            if not batch:
-                break
-            all_issues.extend(batch)
-            start_at += len(batch)
-            print(f"배치 조회: {len(batch)}개 (총 {len(all_issues)}개)")
-            if len(batch) < max_results:
-                break
-        
-        print(f"✅ 전체 티켓 조회 성공: {len(all_issues)}개")
-        
-        # IT-5027이 포함되지 않았다면 직접 추가
-        it_5027_included = any(issue.key == 'IT-5027' for issue in all_issues)
-        if not it_5027_included:
-            try:
-                print("IT-5027이 조회되지 않아 직접 추가합니다...")
-                it_5027_issue = jira.issue('IT-5027', fields=fields_param)
-                all_issues.append(it_5027_issue)
-                print("✅ IT-5027 추가 완료")
-            except Exception as e:
-                print(f"❌ IT-5027 조회 실패: {e}")
+        # 페이지네이션 사용 여부에 따른 티켓 조회
+        if use_pagination:
+            # 페이지네이션을 사용하여 모든 티켓 조회
+            all_issues = []
+            start_at = 0
+            max_results = 1000  # 한 번에 1000개씩 조회
+            
+            while True:
+                batch = jira.search_issues(base_jql, fields=fields_param, startAt=start_at, maxResults=max_results)
+                if not batch:
+                    break
+                all_issues.extend(batch)
+                start_at += len(batch)
+                print(f"배치 조회: {len(batch)}개 (총 {len(all_issues)}개)")
+                if len(batch) < max_results:
+                    break
+            
+            print(f"✅ 전체 티켓 조회 성공 (페이지네이션 사용): {len(all_issues)}개")
+        else:
+            # 페이지네이션 없이 한 번에 조회 (기본값: 최대 1000개)
+            all_issues = jira.search_issues(base_jql, fields=fields_param, maxResults=1000)
+            print(f"✅ 전체 티켓 조회 성공 (페이지네이션 미사용): {len(all_issues)}개")
         
         # 2단계: customfield_10817 필드 값이 해당 주간에 속하는 티켓 필터링
         filtered_issues = []
@@ -774,75 +826,87 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
         end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
         
         print(f"\n=== customfield_10817 필드 값 필터링 ===")
+        print(f"필터링 범위: {start_date_obj} ~ {end_date_obj}")
+        print(f"목표: 해당 주간에 속하는 모든 IT 티켓 포함")
+        
+        # 제거된 티켓들을 확인하기 위한 디버깅 리스트
+        removed_tickets = []
+        included_tickets = []
         
         for issue in all_issues:
             issue_key = issue.key
             custom_field_value = getattr(issue.fields, JIRA_DEPLOY_DATE_FIELD_ID, None)
             
             if custom_field_value:
+                # customfield_10817 값이 있는 경우, 날짜 파싱 및 필터링
                 try:
-                    # 날짜 문자열 파싱 (예: "2025-07-23T11:00:00.000+0900")
-                    date_str = str(custom_field_value)
-                    print(f"    원본 날짜: {date_str}")
-                    
-                    # ISO 형식 날짜 파싱
-                    if 'T' in date_str:
-                        # ISO 형식: "2025-07-23T11:00:00.000+0900"
-                        date_part = date_str.split('T')[0]
+                    # ISO 형식 날짜 문자열을 파싱
+                    if isinstance(custom_field_value, str):
+                        # "2025-07-23T11:00:00.000+0900" 형식 파싱
+                        field_date_str = custom_field_value.split('T')[0]  # 날짜 부분만 추출
+                        field_date = datetime.strptime(field_date_str, '%Y-%m-%d').date()
                     else:
-                        # 단순 날짜 형식: "2025-07-23"
-                        date_part = date_str[:10]
-                    
-                    print(f"    파싱된 날짜: {date_part}")
-                    field_date = datetime.strptime(date_part, '%Y-%m-%d').date()
-                    print(f"    변환된 날짜: {field_date}")
-                    print(f"    범위: {start_date_obj} ~ {end_date_obj}")
-                    print(f"    포함 여부: {start_date_obj <= field_date <= end_date_obj}")
+                        # datetime 객체인 경우
+                        field_date = custom_field_value.date()
                     
                     # 해당 주간에 속하는지 확인
                     if start_date_obj <= field_date <= end_date_obj:
-                        # 딕셔너리 형태로 변환
+                        # 포함되는 티켓
                         issue_dict = {
                             'key': issue_key,
+                            'summary': getattr(issue.fields, 'summary', ''),
+                            'status': getattr(issue.fields, 'status', {}).name if hasattr(getattr(issue.fields, 'status', {}), 'name') else str(getattr(issue.fields, 'status', '')),
+                            'assignee': getattr(issue.fields, 'assignee', {}).displayName if hasattr(getattr(issue.fields, 'assignee', {}), 'displayName') else str(getattr(issue.fields, 'assignee', '')),
+                            'created': getattr(issue.fields, 'created', ''),
+                            'updated': getattr(issue.fields, 'updated', ''),
                             'fields': {
                                 'summary': getattr(issue.fields, 'summary', ''),
-                                'status': {'name': getattr(issue.fields, 'status', '').name if hasattr(getattr(issue.fields, 'status', ''), 'name') else ''},
-                                'assignee': getattr(issue.fields, 'assignee', ''),
-                                'created': str(getattr(issue.fields, 'created', '')),
-                                'updated': str(getattr(issue.fields, 'updated', '')),
-                                JIRA_DEPLOY_DATE_FIELD_ID: str(custom_field_value)
+                                'status': {'name': getattr(issue.fields, 'status', {}).name if hasattr(getattr(issue.fields, 'status', {}), 'name') else str(getattr(issue.fields, 'status', ''))},
+                                JIRA_DEPLOY_DATE_FIELD_ID: custom_field_value
                             }
                         }
                         filtered_issues.append(issue_dict)
-                        print(f"✅ {issue_key}: {field_date} (예정된 시작: {custom_field_value})")
+                        included_tickets.append(f"✅ {issue_key}: {field_date} (예정된 시작: {custom_field_value}) - 포함됨")
                     else:
-                        print(f"⏭️ {issue_key}: {field_date} (범위 외)")
-                        
+                        # 범위 외 티켓
+                        removed_tickets.append(f"⏭️ {issue_key}: {field_date} (범위 외: {start_date_obj} ~ {end_date_obj})")
                 except Exception as e:
-                    print(f"❌ {issue_key}: 날짜 파싱 오류 - {custom_field_value} ({e})")
-                    continue
+                    print(f"날짜 파싱 오류 ({issue_key}): {e}")
+                    removed_tickets.append(f"⏭️ {issue_key}: 날짜 파싱 오류")
             else:
-                print(f"⏭️ {issue_key}: customfield_10817 값 없음")
+                # customfield_10817 값이 없는 티켓 (이 경우는 발생하지 않아야 함)
+                removed_tickets.append(f"⏭️ {issue_key}: customfield_10817 값 없음")
         
+        # 필터링 결과 출력
         print(f"\n=== 필터링 결과 ===")
         print(f"전체 티켓: {len(all_issues)}개")
         print(f"customfield_10817 값이 있는 티켓: {len([i for i in all_issues if getattr(i.fields, JIRA_DEPLOY_DATE_FIELD_ID, None)])}개")
         print(f"해당 주간에 속하는 티켓: {len(filtered_issues)}개")
+        print(f"제거된 티켓: {len(removed_tickets)}개")
         
-        # 3단계: 날짜순 정렬
-        filtered_issues.sort(key=lambda x: x['fields'].get(JIRA_DEPLOY_DATE_FIELD_ID, ''))
+        # 포함된 티켓 상세 정보 출력
+        print(f"\n=== 포함된 티켓 상세 정보 ===")
+        for ticket_info in included_tickets:
+            print(f"  {ticket_info}")
+        
+        # 제거된 티켓 상세 정보 출력 (최대 10개만)
+        if removed_tickets:
+            print(f"\n=== 제거된 티켓 상세 정보 ===")
+            for i, ticket_info in enumerate(removed_tickets[:10]):
+                print(f"  {ticket_info}")
+            if len(removed_tickets) > 10:
+                print(f"  ... 외 {len(removed_tickets) - 10}개")
         
         print(f"\n=== 최종 결과 ===")
         for i, issue in enumerate(filtered_issues, 1):
-            print(f"{i}. {issue['key']}: {issue['fields']['summary']}")
-            print(f"   예정된 시작: {issue['fields'].get(JIRA_DEPLOY_DATE_FIELD_ID, 'N/A')}")
-            print(f"   상태: {issue['fields']['status']['name']}")
-            print()
+            print(f"{i}. {issue['key']}: {issue['summary']}")
+            print(f"   예정된 시작: {issue['fields'][JIRA_DEPLOY_DATE_FIELD_ID]}")
+            print(f"   상태: {issue['status']}")
         
         return filtered_issues
         
     except Exception as e:
-        print(f"❌ customfield_10817 직접 조회 실패: {e}")
+        print(f"Jira 이슈 조회 실패: {e}")
         return []
 
 def main():
@@ -875,6 +939,7 @@ def main():
     # 3. 명령행 인수 처리
     mode = "update"  # 기본값
     force_update = False  # 강제 업데이트 플래그
+    use_pagination = False  # 페이지네이션 사용 여부 (기본값: False)
     
     if len(sys.argv) > 1:
         if sys.argv[1] == "--check-page":
@@ -895,10 +960,30 @@ def main():
         else:
             mode = sys.argv[1]
     
+    # --pagination 옵션 확인
+    if "--pagination" in sys.argv:
+        use_pagination = True
+        print("페이지네이션 옵션이 활성화되었습니다.")
+    elif "--no-pagination" in sys.argv:
+        use_pagination = False
+        print("페이지네이션 옵션이 비활성화되었습니다. (기본값)")
+    
     # 4. 날짜 범위 계산
     monday, sunday = get_week_range(mode)
     start_date_str, end_date_str = monday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d')
     page_title = get_page_title(monday, sunday)
+    
+    # 디버깅: 날짜 범위 상세 정보 출력
+    print(f"\n=== 날짜 범위 계산 디버깅 ===")
+    print(f"현재 날짜: {date.today()}")
+    print(f"요일: {date.today().weekday()} (0=월요일, 6=일요일)")
+    print(f"계산된 월요일: {monday}")
+    print(f"계산된 일요일: {sunday}")
+    print(f"시작일: {start_date_str}")
+    print(f"종료일: {end_date_str}")
+    print(f"페이지 제목: {page_title}")
+    print(f"사용자 의도 확인: 7월 4째주 (07/21~07/27)와 일치하는가?")
+    print()
     
     # 모드별 설명 메시지
     mode_descriptions = {
@@ -918,7 +1003,7 @@ def main():
         f"'{JIRA_DEPLOY_DATE_FIELD_ID}' >= '{start_date_str}' AND '{JIRA_DEPLOY_DATE_FIELD_ID}' <= '{end_date_str}' "
         f"ORDER BY updated DESC"
     )
-    issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str)
+    issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     if not issues:
         print(f"{mode_desc}에 배포 예정 티켓 없음. 빈 테이블로 생성/업데이트.")
 
@@ -939,7 +1024,7 @@ def main():
         changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
 
     # 7. Confluence 페이지 생성/업데이트 및 Slack 알림
-    page_content = create_confluence_content(jql_query, issues, atlassian_url, jira, jira_project_key, start_date_str, end_date_str)
+    page_content = create_confluence_content(jql_query, issues, atlassian_url, jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     try:
         if confluence.page_exists(space=confluence_space_key, title=page_title):
             page_id = confluence.get_page_id(space=confluence_space_key, title=page_title)
@@ -998,14 +1083,11 @@ def main():
                     notified_changes.add(change_hash)
                     save_notified_changes(notified_changes)
                     
-                    total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
                     print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
                 elif total_changes > 0:
-                    total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
                     print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
                 else:
-                    slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
-                    send_slack(slack_msg)
+                    print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
                 
                 notify_new_deploy_tickets(issues, atlassian_url, page_title)
                 log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 업데이트.")
@@ -1066,14 +1148,11 @@ def main():
                 notified_changes.add(change_hash)
                 save_notified_changes(notified_changes)
                 
-                total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
                 print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
             elif total_changes > 0:
-                total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
                 print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
             else:
-                slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}"
-                send_slack(slack_msg)
+                print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
             
             notify_new_deploy_tickets(issues, atlassian_url, page_title)
             log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 생성.")
