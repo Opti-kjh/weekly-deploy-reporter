@@ -1,0 +1,155 @@
+---
+alwaysApply: true
+---
+# weekly-deploy-reporter 프로젝트 개발 지침 및 구조
+
+## 1. 기본 원칙
+  
+- 가독성을 최우선으로 하며, 중복 코드는 최소화하고, 재사용 가능한 함수/컴포넌트로 분리합니다.
+- 모든 함수/메서드는 단일 책임 원칙을 따릅니다.
+- 변수/함수/컴포넌트 이름은 명확하고 의미 있게 작성합니다.
+- 하드코딩된 값은 상수로 분리합니다.
+- 가독성을 최우선으로 하며, 중복 코드는 최소화하고, 재사용 가능한 함수/스크립트로 분리합니다.
+- 모든 함수/스크립트는 단일 책임 원칙을 따릅니다.
+- 변수/함수/파일 이름은 명확하고 의미 있게 작성합니다.
+- 하드코딩된 값은 상수 또는 설정 파일로 분리합니다.
+- 코드 스타일과 명명 규칙을 일관되게 유지합니다.
+- 주석은 코드가 '왜' 그렇게 작성되었는지 설명합니다.
+- 모든 요청에 대해서 단계적으로 생각하고 진행합니다.
+- 의사코드를 작성하는 것을 잊지 말아야 합니다.
+- python 코드를 작성 할 때에는 들여쓰기에 항상 유의할 것이며, 잘못 들여쓰기 된 코드나 공백이 잘못 들어가 있다면 발견 즉시 수정하도록 합니다.
+- 사용자의 요청에 대해서 완료했더라도 다시 검토하는 과정을 거칩니다.
+- 요청 내용에 누락되더라도 항상 아래의 요청을 접미어와 같이 추가한 것으로 간주합니다.
+  : 하나하나 꼼꼼하게 확인하고 내 의도를 잘 파악해. 단계별로 생각하고 작성해. use context7
+
+---
+
+## 2. 코드 구현 가이드라인
+: 코드를 작성할 때 다음 규칙을 따르세요
+- 코드의 가독성을 높이기 위해 가능하면 조기 반환을 사용합니다.
+- 코드의 가독성을 높이기 위해 가능하면 컴포넌트의 볼륨을 작게 유지 및 관리합니다.
+- HTML 요소의 스타일을 지정할 때는 항상 Tailwind 클래스를 사용하고 CSS나 태그를 사용하지 마세요.
+- 가능하면 클래스 태그에 3차 연산자 대신 ":"를 사용하세요.
+- 설명적인 변수 및 함수/상수 이름을 사용하세요. 또한 이벤트 함수의 이름에 'handle' 접두사를 붙여야 합니다(예: onClick의 경우 'handleClick', onKeyDown의 경우 'handleKeyDown').
+- 요소에 접근성 기능을 구현하세요. 예를 들어 태그에는 tabindex="0", aria-label, on:click, on:keydown 및 이와 유사한 속성이 있어야 합니다.
+- 함수 대신 const를 사용하세요(예: "const toggle = () =>"). 또한 가능하면 유형을 정의하세요.
+- 모든 기능함수에는 적절한 주석 블럭을 작성하세요.
+- 쉽고 가독성 있는 코드에 집중하세요.
+- 우수한 성능의 코드 작성에 집중하세요.
+- 요청된 모든 기능을 완벽하게 구현하세요.
+- 할 일, 자리 표시자 또는 누락된 부분을 남겨두지 마세요.
+- 코드가 완전한지 확인하세요! 완전히 완성되었는지 확인하세요.
+- 필요한 모든 임포트를 포함하고 주요 구성 요소의 이름을 올바르게 지정하세요.
+- 간결하게 작성하세요 다른 장황한 내용은 최소화하세요.
+- 정답이 없을 수도 있다고 생각되면 그렇게 말하세요.
+- 답을 모른다면 추측하지 말고 직접 말하세요.
+- 조기 반환(early return) 패턴을 적극 활용합니다.
+- 컴포넌트는 작고 관리하기 쉽게 분리합니다.
+- Tailwind CSS만 사용하여 스타일을 지정합니다. (CSS/Emotion/Material UI 스타일 사용 금지)
+- 조건부 클래스는 ":" 연산자를 사용합니다.
+- 접근성(a11y) 속성(aria-label, tabindex, onKeyDown 등)을 필수로 추가합니다.
+- 함수 선언은 const로, 타입은 명확히 정의합니다.
+- 스크립트/함수는 작고 관리하기 쉽게 분리합니다.
+- Python, JavaScript 등 언어별 표준 스타일을 따릅니다.
+- 환경 변수 및 설정 파일(.env, config.json 등)을 적극 활용합니다.
+- 함수 선언은 명확한 네이밍과 타입(가능한 경우)을 사용합니다.
+- 모든 기능 함수에는 적절한 주석 블럭을 작성합니다.
+- 불필요한 API 호출을 최소화하고, 대용량 데이터는 페이지네이션을 적용합니다.
+- 보안: 입력값 검증, 환경변수 사용, 외부 라이브러리 취약점 점검, XSS/SQL Injection 방지 등.
+- 불필요한 API 호출을 최소화하고, 대용량 데이터는 페이지네이션 또는 배치 처리합니다.
+- 보안: 입력값 검증, 환경변수 사용, 외부 라이브러리 취약점 점검, 민감 정보 노출 금지.
+- 테스트: 단위/통합 테스트를 작성하고, 커버리지 80% 이상을 유지합니다. test_ 파일의 저장은 루트의 tests 폴더 하위에 저장/관리합니다.
+
+---
+
+## 3. 실제 프로젝트 구조
+
+```plaintext
+weekly-deploy-reporter/
+├── AGENTS.md
+├── CLAUDE.md
+├── LICENSE
+├── README.md
+├── commitlint.config.js
+├── create_confluence_page_content
+├── create_weekly_report.py
+├── cron_example.txt
+├── cron.log
+├── cron_test.log
+├── deploy_ticket_links.csv
+├── deploy_ticket_links.json
+├── getJiraDeployedBy.js
+├── notified_deploy_keys.json
+├── package.json
+├── temp_crontab_config.txt
+├── weekly_issues.json
+├── weekly_issues_snapshot.json
+├── yarn.lock
+├── .cz-config.js
+├── .gitignore
+├── .cursorignore
+├── .roomodes
+├── node_modules/
+├── venv/
+├── tests/
+│   ├── test_create_weekly_report.py
+│   └── __pycache__/
+├── .taskmaster/
+│   ├── config.json
+│   ├── state.json
+│   ├── tasks/
+│   │   └── tasks.json
+│   ├── templates/
+│   │   └── example_prd.txt
+│   ├── reports/
+│   │   └── task-complexity-report.json
+│   └── docs/
+│       └── weekly-report-prd.txt
+├── .github/
+├── .husky/
+├── .clinerules/
+├── .pytest_cache/
+├── .benchmarks/
+├── .specstory/
+└── __pycache__/
+```
+
+---
+
+## 4. 주요 폴더/파일 설명
+
+- `create_weekly_report.py` : 주간 리포트 생성 메인 파이썬 스크립트
+- `getJiraDeployedBy.js` : Jira 배포자 정보 추출 JS 스크립트
+- `deploy_ticket_links.json/csv` : 배포 티켓 링크 데이터
+- `weekly_issues.json`, `weekly_issues_snapshot.json` : 이슈 스냅샷 및 현황 데이터
+- `cron.log`, `cron_test.log` : 크론 실행 및 테스트 로그
+- `README.md` : 프로젝트 설명 및 실행 방법
+- `.taskmaster/` : TaskMaster 관련 설정, 작업, 템플릿, 리포트, 문서
+  - `tasks/tasks.json` : TaskMaster 작업 정의
+  - `templates/` : PRD 등 템플릿
+  - `reports/` : 작업 복잡도 등 리포트
+  - `docs/` : 산출물/문서
+- `tests/` : 테스트 코드 및 캐시
+- `node_modules/`, `venv/` : Node, Python 의존성 디렉토리
+
+---
+
+## 5. 문서화 및 버전 관리
+
+- 모든 공개 API/스크립트에는 문서 주석을 작성합니다.
+- README.md에 프로젝트 설정 및 실행 방법을 상세히 기술합니다.
+- 복잡한 알고리즘/비즈니스 로직은 별도 문서로 작성합니다.
+- 변경 사항은 CHANGELOG 또는 커밋 메시지에 기록합니다.
+- 커밋 메시지는 명확하고 설명적으로 작성합니다.
+- 기능 개발은 별도 브랜치에서 진행하고, PR 전 코드 리뷰를 필수로 합니다.
+- 메인 브랜치는 항상 배포 가능한 상태로 유지합니다.
+
+---
+
+## 6. 적용 예시 (현재 프로젝트 기준)
+
+- Python, JS 스크립트는 각각 역할별로 파일 분리 및 주석 작성
+- TaskMaster 관련 작업은 `.taskmaster/` 하위에 정의 및 관리
+- 테스트는 `tests/`에 작성
+- 환경 변수 및 민감 정보는 `.env` 또는 별도 설정 파일에 저장, 코드에 직접 노출 금지
+- 코드 리뷰와 테스트를 거친 후에만 메인 브랜치에 병합

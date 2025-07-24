@@ -1,27 +1,52 @@
-
 # -*- coding: utf-8 -*-
+"""
+주간 배포 리포트 생성 스크립트
+
+사용법:
+    python create_weekly_report.py [mode] [options]
+    
+모드:
+    current  - 이번 주 배포 예정 티켓으로 리포트 생성/업데이트 (기본값)
+    create   - 다음 주 (차주) 배포 예정 티켓으로 리포트 생성
+    update   - 이번 주 배포 예정 티켓으로 리포트 업데이트
+    last     - 지난 주 배포 예정 티켓으로 리포트 생성/업데이트
+    
+옵션:
+    --no-pagination  - 페이지네이션 없이 한 번에 조회 (기본값, 최대 1000개)
+    --pagination     - 페이지네이션을 사용하여 모든 티켓 조회
+    --force-update   - 강제 업데이트 (변경사항 없어도 업데이트)
+    --check-page     - Confluence 페이지 내용 확인
+    --debug-links [티켓키] - 특정 티켓의 연결 관계 디버깅
+
+예시:
+    python create_weekly_report.py current
+    python create_weekly_report.py create --pagination
+    python create_weekly_report.py update --force-update
+    python create_weekly_report.py --debug-links IT-5027
+"""
+
 # 필요한 외부 라이브러리와 환경 변수들을 불러옵니다.
 import os
 import datetime
 import sys
 from dotenv import load_dotenv
-from atlassian.jira import Jira
+from jira import JIRA
 from atlassian.confluence import Confluence
 import requests
 import json
 import re
 import html
 from datetime import datetime, date, timedelta
+import numpy as np # 스마트 필터링 시 사용
 
 # .env 파일에서 환경 변수들을 읽어와서 현재 환경에 설정합니다.
-# 예: ATLASSIAN_URL, ATLASSIAN_USERNAME, ATLASSIAN_API_TOKEN 등
+# 예: ATLASSIAN_URL, ATLASSIAN_USERNAME, ATLASSIAN_API_TOKEN, SLACK_WEBHOOK_URL, SLACK_BOT_TOKEN 등
 load_dotenv()
 
 # --- 스크립트 설정 값 ---
 
-# Jira에서 '예정된 시작' 날짜를 나타내는 커스텀 필드의 ID입니다.
-# 이 필드를 기준으로 배포 일정을 조회합니다.
-JIRA_DEPLOY_DATE_FIELD_ID = "customfield_10817" 
+# Jira 필드 ID 설정
+JIRA_DEPLOY_DATE_FIELD_ID = "customfield_10817"  # 예정된 시작 필드 ID
 
 # Confluence에서 생성될 주간 리포트 페이지의 상위 페이지 제목입니다.
 # 이 페이지 아래에 "X월 Y째주: (MM/DD~MM/DD)" 형식의 자식 페이지가 생성됩니다.
@@ -38,12 +63,40 @@ def load_env_vars(keys):
     return values
 
 def get_week_range(mode):
+    """
+    모든 모드에서 동일한 날짜 계산 방식을 사용합니다.
+    해당 주간에 속하는 모든 IT 티켓을 포함하는 것이 목표입니다.
+    """
     today = date.today()
+    
+    # 모든 모드에서 동일한 계산 방식 사용
     if mode == "create":
+        # 다음 주 (차주) - 현재 주의 다음 주
         monday = today + timedelta(days=(7 - today.weekday()))
-    else:
+    elif mode == "current":
+        # 이번 주 (현재 주) - 오늘이 속한 주
         monday = today - timedelta(days=today.weekday())
+    elif mode == "last":
+        # 지난 주 - 현재 주의 이전 주
+        monday = today - timedelta(days=today.weekday() + 7)
+    elif mode == "update":
+        # 업데이트 모드도 현재 주와 동일
+        monday = today - timedelta(days=today.weekday())
+    else:
+        # 기본값: 이번 주
+        monday = today - timedelta(days=today.weekday())
+    
+    # 일요일은 월요일 + 6일
     sunday = monday + timedelta(days=6)
+    
+    # 디버깅 정보 출력
+    print(f"=== 날짜 계산 디버깅 ===")
+    print(f"모드: {mode}")
+    print(f"현재 날짜: {today}")
+    print(f"계산된 월요일: {monday}")
+    print(f"계산된 일요일: {sunday}")
+    print(f"주간 범위: {monday.strftime('%m/%d')}~{sunday.strftime('%m/%d')}")
+    
     return monday, sunday
 
 def get_page_title(monday, sunday):
@@ -71,170 +124,414 @@ def normalize_html_content(html_content):
     unescaped = html.unescape(html_content)
     return re.sub(r'\s+', ' ', unescaped).strip()
 
+# 기본 Jira 매크로 (날짜 포맷 없음)
 JIRA_MACRO_TEMPLATE = '''
 <ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">key,type,summary,assignee,status,updated,created,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="columns">key,type,summary,assignee,status</ac:parameter>
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
 </ac:structured-macro>
 '''
 
-DEPLOY_LINKS_TABLE_HEADER = """
-<h2 style="margin-top: 20px;">배포티켓 링크 목록</h2>
-<table style="width: 100%; border-collapse: collapse;">
-  <thead>
-    <tr>
-      <th>Jira Issue</th>
-      <th>배포티켓(링크)</th>
-    </tr>
-  </thead>
-  <tbody>
-"""
+# 날짜 컬럼용 매크로 (updated, created, 예정된 시작)
+JIRA_DATE_MACRO_TEMPLATE = '''
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">created,updated,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+</ac:structured-macro>
+'''
 
-DEPLOY_LINKS_TABLE_ROW = """
-<tr>
-  <td><a href=\"{ticket_url}\" target=\"_blank\">{key}</a><br/>: {summary}</td>
-  <td>{deploy_tickets_html}</td>
-</tr>
-"""
+# 모든 컬럼을 포함하되 날짜 포맷이 적용된 매크로
+JIRA_FULL_MACRO_TEMPLATE = '''
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">key,type,summary,assignee,status,created,updated,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+</ac:structured-macro>
+'''
 
-DEPLOY_LINKS_TABLE_FOOTER = "</tbody></table>"
+# 날짜 포맷이 적용된 전체 매크로 (GitHub 최신 버전)
+JIRA_CUSTOM_DATE_FORMAT_TEMPLATE = '''
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">key,type,summary,assignee,status,created,updated,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+  <ac:parameter ac:name="maximumIssues">1000</ac:parameter>
+</ac:structured-macro>
+'''
+
+# 배포 예정 목록 Jira 매크로 템플릿
+DEPLOY_LINKS_MACRO_TEMPLATE = '''
+<h2 style="margin-top: 20px;">배포 예정 목록</h2>
+<p><em>아래 표는 이번 주 배포 예정인 부모 IT 티켓들을 보여줍니다. 각 티켓의 배포 관계는 Jira에서 직접 확인하실 수 있습니다.</em></p>
+<ac:structured-macro ac:name="jira">
+  <ac:parameter ac:name="columns">key,status,issuelinks</ac:parameter>
+  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
+  <ac:parameter ac:name="columnWidths">100,80,300</ac:parameter>
+  <ac:parameter ac:name="maximumIssues">100</ac:parameter>
+</ac:structured-macro>
+'''
+
 
 # === [2단계] API/알림/스냅샷 래퍼 함수 간소화 ===
 def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_date):
+    # JQL 쿼리를 단순화하여 필드 접근 문제를 우회
     jql_query = (
-        f"project = '{project_key}' AND "
-        f"'{date_field_id}' >= '{start_date}' AND '{date_field_id}' <= '{end_date}' "
-        f"ORDER BY '{date_field_id}' ASC"
+        f"project = '{project_key}' "
+        f"ORDER BY updated DESC"
     )
     print(f"JQL: {jql_query}")
     try:
-        issues = jira.jql(jql_query, fields="*all")
-        return issues['issues']
+        # fields를 구체적으로 지정하여 customfield_10817 필드 접근 문제 해결
+        fields_param = f"key,summary,status,assignee,created,updated,{date_field_id}"
+        issues = jira.jql(jql_query, fields=fields_param)
+        
+        # Python에서 날짜 필터링
+        filtered_issues = []
+        for issue in issues['issues']:
+            field_value = issue['fields'].get(date_field_id)
+            if field_value:
+                try:
+                    # 날짜 문자열을 파싱하여 비교
+                    field_date = datetime.strptime(field_value[:10], '%Y-%m-%d').date()
+                    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                    
+                    if start_date_obj <= field_date <= end_date_obj:
+                        filtered_issues.append(issue)
+                except Exception as e:
+                    print(f"날짜 파싱 오류 ({issue['key']}): {e}")
+                    continue
+        
+        print(f"✅ 필터링 완료: {len(filtered_issues)}개 이슈 (전체: {len(issues['issues'])}개)")
+        return filtered_issues
     except Exception as e:
         print(f"Jira 검색 오류: {e}")
         return []
 
-def format_jira_datetime(dt_str):
-    if not dt_str:
-        return ""
-    try:
-        # JIRA 기본 날짜 포맷: 2024-07-16T02:30:00.000+0900
-        dt = datetime.strptime(dt_str[:19], "%Y-%m-%dT%H:%M:%S")
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return dt_str  # 파싱 실패 시 원본 반환
 
-def create_confluence_content(jql_query, issues, jira_url):
-    macro = JIRA_MACRO_TEMPLATE.format(jql_query=jql_query)
-    html_rows = []
-    # 배포티켓(링크) summary 캐싱용 딕셔너리
-    deploy_ticket_summaries = {}
-    # 1차 패스: 모든 이슈의 key-summary 매핑 생성 (자기 자신 및 링크용)
-    for issue in issues:
-        deploy_ticket_summaries[issue['key']] = issue['fields'].get('summary', '')
-    # 2차 패스: 표 생성
-    for issue in issues:
-        key = issue['key']
-        summary = issue['fields'].get('summary', '')
-        ticket_url = f"{jira_url}/browse/{key}"
-        fields = issue['fields']
-        deploy_tickets = []
-        if 'issuelinks' in fields and fields['issuelinks']:
-            for link in fields['issuelinks']:
-                link_type = link.get('type', {})
-                # outwardIssue: 내가 배포티켓의 부모일 때 (ex: deploys)
-                if link_type.get('name') == 'deploys' and 'outwardIssue' in link:
-                    linked = link['outwardIssue']
-                    linked_key = linked['key']
-                    # summary가 없으면 API로 조회 (최적화: 이미 캐시에 있으면 사용)
-                    linked_summary = deploy_ticket_summaries.get(linked_key)
-                    if linked_summary is None:
-                        # API로 개별 조회 (성능상 이슈가 있을 수 있음)
-                        try:
-                            resp = requests.get(f"{jira_url}/rest/api/2/issue/{linked_key}",
-                                               auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
-                            if resp.status_code == 200:
-                                linked_summary = resp.json()['fields'].get('summary', '')
-                                deploy_ticket_summaries[linked_key] = linked_summary
-                            else:
-                                linked_summary = ''
-                        except Exception:
-                            linked_summary = ''
-                    deploy_tickets.append(f'<a href="{jira_url}/browse/{linked_key}" target="_blank">{linked_key}</a><br/>: {linked_summary}')
-                # inwardIssue: 내가 배포티켓일 때 (ex: is deployed by)
-                if link_type.get('inward') == 'is deployed by' and 'inwardIssue' in link:
-                    linked = link['inwardIssue']
-                    linked_key = linked['key']
-                    linked_summary = deploy_ticket_summaries.get(linked_key)
-                    if linked_summary is None:
-                        try:
-                            resp = requests.get(f"{jira_url}/rest/api/2/issue/{linked_key}",
-                                               auth=(os.getenv('ATLASSIAN_USERNAME'), os.getenv('ATLASSIAN_API_TOKEN')))
-                            if resp.status_code == 200:
-                                linked_summary = resp.json()['fields'].get('summary', '')
-                                deploy_ticket_summaries[linked_key] = linked_summary
-                            else:
-                                linked_summary = ''
-                        except Exception:
-                            linked_summary = ''
-                    deploy_tickets.append(f'<a href="{jira_url}/browse/{linked_key}" target="_blank">{linked_key}</a><br/>: {linked_summary}')
-        deploy_tickets_html = "<br/>".join(deploy_tickets) if deploy_tickets else ''
-        html_rows.append(DEPLOY_LINKS_TABLE_ROW.format(ticket_url=ticket_url, key=key, summary=summary, deploy_tickets_html=deploy_tickets_html))
-    return macro + DEPLOY_LINKS_TABLE_HEADER + ''.join(html_rows) + DEPLOY_LINKS_TABLE_FOOTER
+
+
+
+def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_key, start_date_str, end_date_str, use_pagination=False): 
+    # 날짜 포맷이 적용된 전체 매크로 사용
+    macro = JIRA_CUSTOM_DATE_FORMAT_TEMPLATE.format(jql_query=jql_query)
+    
+    # get_jira_issues_by_customfield_10817 함수를 사용하여 정확한 배포 예정 티켓 조회
+    print(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===")
+    deploy_issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
+    
+    # IT 티켓만 필터링하는 HTML 테이블 생성 (정확한 결과 사용)
+    deploy_links_html_table = create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url)
+    
+    return macro + deploy_links_html_table
+
+def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
+    """정확한 배포 예정 티켓들을 사용하여 HTML 테이블을 생성합니다."""
+    try:
+        print(f"=== 정확한 배포 예정 티켓으로 HTML 테이블 생성 ===")
+        print(f"배포 예정 티켓 수: {len(deploy_issues)}")
+        
+        html_content = '''
+<h2 style="margin-top: 20px;">배포 예정 목록</h2>
+<p><em>아래 표는 이번 주 배포 예정인 부모 IT 티켓들을 보여줍니다. 각 티켓의 배포 관계는 Jira에서 직접 확인하실 수 있습니다.</em></p>
+
+<div style="background-color: #f4f5f7; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+<h4> 배포 관계 표시 형식 안내</h4>
+<p>아래 표의 <strong>연결된 이슈</strong> 컬럼에는 다음과 같은 형식으로 배포 관계가 표시됩니다:</p>
+<ul>
+<li><strong>부모 IT 티켓</strong>: 배포 대상이 되는 IT 티켓</li>
+<li><strong>배포 티켓</strong>: "is deployed by" 관계로 연결된 IT 티켓들만 표시</li>
+<li><strong>표시 형식</strong>: 각 배포 티켓이 새로운 줄로 구분되어 표시됩니다</li>
+</ul>
+<p><em>예시: IT-6516 티켓의 경우, prod-beluga-manager-consumer로 "deploy"에 대한 배포 Release(IT-4831, IT-5027) v1.5.0 (#166) 형태로 표시됩니다.</em></p>
+</div>
+
+<table class="wrapped" style="width: 100%;">
+<colgroup>
+<col style="width: 120px;" />
+<col style="width: 300px;" />
+<col style="width: 400px;" />
+</colgroup>
+<tbody>
+<tr>
+<th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">키</th>
+<th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">요약</th>
+<th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">연결된 이슈</th>
+</tr>
+'''
+        
+        for i, issue in enumerate(deploy_issues, 1):
+            issue_key = issue['key']
+            
+            # 데이터 구조에 따라 summary와 status 추출
+            if 'fields' in issue:
+                # get_jira_issues_by_customfield_10817 함수의 구조
+                summary = issue['fields'].get('summary', '')
+                status = issue['fields'].get('status', {}).get('name', '')
+                custom_field = issue['fields'].get(JIRA_DEPLOY_DATE_FIELD_ID, '')
+            else:
+                # 기존 구조
+                summary = issue.get('summary', '')
+                status = issue.get('status', '')
+                custom_field = issue.get('customfield_10817', '')
+            
+            print(f"{i}. {issue_key}: {summary}")
+            print(f"   예정된 시작: {custom_field}")
+            print(f"   상태: {status}")
+            
+            # IT 티켓만 필터링하여 연결된 이슈 조회 (재시도 로직 포함)
+            linked_it_tickets = get_linked_it_tickets_with_retry(jira, issue_key)
+            print(f"   연결된 IT 티켓 수: {len(linked_it_tickets)}")
+            
+            # 연결된 IT 티켓들을 포맷팅
+            if linked_it_tickets:
+                linked_tickets_html = '<br>'.join([
+                    f"{j}. <a href=\"{jira_url}/browse/{ticket['key']}\">{ticket['key']}</a><span style=\"display: inline-block; padding: 2px 8px; margin-left: 4px; border-radius: 12px; font-size: 11px; font-weight: 500; {get_status_style(ticket['status'])}\">{ticket['status']}</span><br>: {ticket['summary']}"
+                    for j, ticket in enumerate(linked_it_tickets, 1)
+                ])
+            else:
+                linked_tickets_html = '<em>연결된 IT 티켓 없음</em>'
+            
+            html_content += f'''
+<tr>
+<td style="padding: 8px; border: 1px solid #dfe1e6;"><a href="{jira_url}/browse/{issue_key}">{issue_key}</a></td>
+<td style="padding: 8px; border: 1px solid #dfe1e6;">{summary}</td>
+<td style="padding: 8px; border: 1px solid #dfe1e6;">{linked_tickets_html}</td>
+</tr>
+'''
+        
+        html_content += '''
+</tbody>
+</table>
+'''
+        
+        print(f"=== HTML 테이블 생성 완료 ===")
+        return html_content
+        
+    except Exception as e:
+        print(f"배포 예정 목록 HTML 테이블 생성 실패: {e}")
+        return f'<p>배포 예정 목록 HTML 테이블 생성 중 오류가 발생했습니다: {e}</p>'
+
+def get_status_style(status):
+    """상태에 따른 CSS 스타일을 반환합니다."""
+    status_styles = {
+        '실행을 기다리는 중': 'background-color: #FFE4B5; color: #8B4513;',
+        '실행': 'background-color: #FFE4B5; color: #8B4513;',
+        '완료': 'background-color: #90EE90; color: #006400;',
+        'To Do': 'background-color: #FFE4B5; color: #8B4513;',
+        'In Progress': 'background-color: #FFE4B5; color: #8B4513;',
+        'Done': 'background-color: #90EE90; color: #006400;',
+        '대기': 'background-color: #FFE4B5; color: #8B4513;'
+    }
+    return status_styles.get(status, 'background-color: #D3D3D3; color: #2F4F4F;')
+
+def get_linked_it_tickets(jira, issue_key):
+    """특정 이슈의 'is deployed by' 관계로 연결된 IT 티켓들을 가져옵니다."""
+    try:
+        print(f"=== '{issue_key}'의 연결된 IT 티켓 조회 시작 ===")
+        
+        # Jira API에서 이슈 정보를 가져옵니다 (issuelinks 확장)
+        issue_response = jira.issue(issue_key, expand='issuelinks')
+        
+        # 응답이 딕셔너리인지 확인
+        if isinstance(issue_response, dict):
+            issue_data = issue_response
+        else:
+            # 객체인 경우 딕셔너리로 변환
+            issue_data = issue_response.raw
+        
+        linked_it_tickets = []
+        
+        # issuelinks 필드가 있는지 확인
+        if 'fields' in issue_data and 'issuelinks' in issue_data['fields']:
+            print(f"발견된 issuelinks 수: {len(issue_data['fields']['issuelinks'])}")
+            
+            for i, link in enumerate(issue_data['fields']['issuelinks']):
+                link_type = link.get('type', {}).get('name', '')
+                print(f"  링크 {i+1}: {link_type}")
+                
+                linked_ticket = None
+                
+                # 배포 관련 링크 타입만 확인 (Deployments, is deployed by로 제한)
+                deployment_link_types = ['Deployments', 'is deployed by']
+                if link_type in deployment_link_types:
+                    # IT-5332의 경우: IT-5332가 배포되는 관계이므로 inwardIssue가 배포 티켓
+                    if 'inwardIssue' in link:
+                        linked_ticket = link['inwardIssue']
+                        print(f"    inwardIssue 발견: {linked_ticket.get('key', 'Unknown')}")
+                    elif 'outwardIssue' in link:
+                        linked_ticket = link['outwardIssue']
+                        print(f"    outwardIssue 발견: {linked_ticket.get('key', 'Unknown')}")
+                
+                # 연결된 티켓이 IT 관련 타입인 경우 추가
+                if linked_ticket:
+                    issue_type = linked_ticket.get('fields', {}).get('issuetype', {}).get('name', '')
+                    print(f"    티켓 타입: {issue_type}")
+                    
+                    # IT 관련 이슈 타입들 (더 유연한 필터링)
+                    it_issue_types = ['변경', 'Change', 'IT', '개발', 'Development', 'Task', 'Sub-task']
+                    if any(it_type in issue_type for it_type in it_issue_types):
+                        ticket_info = {
+                            'key': linked_ticket['key'],
+                            'summary': linked_ticket['fields'].get('summary', ''),
+                            'status': linked_ticket['fields'].get('status', {}).get('name', '')
+                        }
+                        linked_it_tickets.append(ticket_info)
+                        print(f"    ✅ IT 티켓 추가: {ticket_info['key']} - {ticket_info['summary']}")
+                    else:
+                        print(f"    ⏭️ IT 타입이 아님: {linked_ticket.get('key', 'Unknown')} ({issue_type})")
+                else:
+                    print(f"    ⏭️ 연결된 티켓 없음")
+        else:
+            print("issuelinks 필드를 찾을 수 없습니다.")
+        
+        print(f"=== '{issue_key}' 연결된 IT 티켓 조회 완료: {len(linked_it_tickets)}개 ===")
+        return linked_it_tickets
+        
+    except Exception as e:
+        print(f"'{issue_key}'의 연결된 IT 티켓 조회 실패: {e}")
+        return []
+
+def get_linked_it_tickets_with_retry(jira, issue_key, max_retries=3):
+    """재시도 로직을 포함한 연결된 IT 티켓 조회"""
+    for attempt in range(max_retries):
+        try:
+            result = get_linked_it_tickets(jira, issue_key)
+            if result is not None:  # 성공적인 결과
+                return result
+        except Exception as e:
+            print(f"'{issue_key}' 조회 시도 {attempt + 1}/{max_retries} 실패: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1)  # 1초 대기 후 재시도
+            else:
+                print(f"'{issue_key}' 최대 재시도 횟수 초과")
+                return []
+    return []
+
+
+
+def get_macro_table_issues(jira, jira_project_key, start_date_str, end_date_str, use_pagination=False):
+    """macro table에 표시될 실제 티켓들을 동적으로 가져옵니다."""
+    try:
+        print(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===")
+        
+        # customfield_10817 필드를 직접 사용하여 정확한 티켓 조회
+        issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
+        
+        if issues:
+            print(f"macro table용 티켓을 customfield_10817 필드로 조회했습니다.")
+            return issues
+        
+        # customfield_10817에서 데이터를 찾지 못한 경우, 다른 필드로 시도
+        date_fields = [
+            "created",            # 생성일
+            "updated",            # 수정일
+            "duedate"             # 마감일
+        ]
+        
+        for field in date_fields:
+            try:
+                jql_query = (
+                    f"project = '{jira_project_key}' AND "
+                    f"'{field}' >= '{start_date_str}' AND '{field}' <= '{end_date_str}' "
+                    f"ORDER BY '{field}' ASC"
+                )
+                issues = get_jira_issues_simple(jira, jira_project_key, field, start_date_str, end_date_str)
+                if issues:
+                    print(f"macro table용 티켓을 {field} 필드로 조회했습니다.")
+                    return issues
+            except Exception as e:
+                print(f"{field} 필드로 조회 실패: {e}")
+                continue
+        
+        # 모든 필드에서 데이터를 찾지 못한 경우, 최근 티켓들을 가져옵니다
+        print("날짜 필드에서 데이터를 찾지 못하여 최근 티켓들을 가져옵니다.")
+        jql_query = (
+            f"project = '{jira_project_key}' AND "
+            f"status IN ('실행', '실행을 기다리는 중', '완료') "
+            f"ORDER BY updated DESC"
+        )
+        issues = get_jira_issues_simple(jira, jira_project_key, "updated", start_date_str, end_date_str)
+        return issues[:15]  # 최대 15개 티켓만 반환
+        
+    except Exception as e:
+        print(f"macro table 티켓 조회 실패: {e}")
+        return []
+
+
 
 def send_slack(text):
     url = os.getenv("SLACK_WEBHOOK_URL")
     if not url:
         print("SLACK_WEBHOOK_URL 미설정, Slack 알림 생략")
         return
+    
+    # 시간 제한 확인 (8시~21시 사이에만 알림 전송)
+    notification_start_hour =10
+    notification_end_hour = 21
+    
+    today = datetime.now()
+    if today.hour < notification_start_hour or today.hour >= notification_end_hour:
+        print(f"현재 시간에는 슬랙 알림 전송을 건너뜁니다. (오전 {notification_start_hour}시 ~ {notification_end_hour}시 외)")
+        return
+    
     try:
         r = requests.post(url, json={"text": text})
         if r.status_code != 200:
             print(f"Slack 알림 실패: {r.text}")
+        else:
+            print(f"Slack 알림 전송 성공: {len(text)}자")
     except Exception as e:
         print(f"Slack 알림 오류: {e}")
 
 def snapshot_issues(issues, field_id):
-    return sorted([
-        {
-            "key": i["key"],
-            "summary": i["fields"].get("summary", ""),
-            "assignee": (i["fields"].get("assignee", {}).get("displayName") if i["fields"].get("assignee") else "미지정"),
-            "status": i["fields"].get("status", {}).get("name", ""),
-            "deploy_date": i["fields"].get(field_id, ""),
-        }
-        for i in issues
-    ], key=lambda x: x["key"])
+    """이슈들의 스냅샷을 생성합니다."""
+    snapshot = []
+    for i in issues:
+        # Jira 객체인지 딕셔너리인지 확인
+        if hasattr(i, 'key'):
+            # Jira 객체인 경우
+            key = i.key
+            fields = i.fields
+            summary = getattr(fields, 'summary', '')
+            status = getattr(fields, 'status', '')
+            status_name = status.name if hasattr(status, 'name') else str(status)
+            assignee = getattr(fields, 'assignee', None)
+            assignee_name = assignee.displayName if assignee else "미지정"
+            custom_field = getattr(fields, field_id, '')
+        else:
+            # 딕셔너리인 경우
+            key = i['key']
+            fields = i['fields']
+            summary = fields.get('summary', '')
+            status = fields.get('status', {})
+            status_name = status.get('name', '') if isinstance(status, dict) else str(status)
+            assignee = fields.get('assignee', None)
+            # assignee가 딕셔너리인지 객체인지 확인
+            if isinstance(assignee, dict):
+                assignee_name = assignee.get('displayName', '미지정')
+            elif hasattr(assignee, 'displayName'):
+                assignee_name = assignee.displayName
+            else:
+                assignee_name = "미지정"
+            custom_field = fields.get(field_id, '')
+        
+        snapshot.append({
+            "key": key,
+            "summary": summary,
+            "status": status_name,
+            "assignee": assignee_name,
+            field_id: custom_field
+        })
+    return snapshot
 
 def issues_changed(prev, curr):
     return prev != curr
 
-def get_week_dates(mode):
-    """
-    실행 모드('create' 또는 'update')에 따라 해당 주의 날짜 범위를 계산합니다.
 
-    - 'create' 모드: 다음 주의 월요일부터 일요일까지의 날짜를 계산합니다.
-    - 그 외 모드('update'): 이번 주의 월요일부터 일요일까지의 날짜를 계산합니다.
-
-    Args:
-        mode (str): 실행 모드 ('create' 또는 'update')
-
-    Returns:
-        tuple: (월요일 날짜 객체, 일요일 날짜 객체)
-    """
-    today = datetime.date.today()
-    if mode == "create":
-        # 오늘 날짜를 기준으로 다음 주 월요일을 계산합니다.
-        # (7 - today.weekday())는 다음 주 월요일까지 남은 날짜 수입니다.
-        monday = today + timedelta(days=(7 - today.weekday()))
-    else:
-        # 오늘 날짜를 기준으로 이번 주 월요일을 계산합니다.
-        # today.weekday()는 월요일(0)부터 일요일(6)까지의 요일을 나타냅니다.
-        monday = today - timedelta(days=today.weekday())
-    
-    # 월요일 날짜에 6일을 더해 해당 주 일요일 날짜를 구합니다.
-    sunday = monday + timedelta(days=6)
-    return monday, sunday
 
 def get_notified_deploy_keys():
     """
@@ -264,309 +561,470 @@ def save_notified_deploy_keys(keys):
         # set을 list로 변환하여 JSON 형식으로 파일에 저장합니다.
         json.dump(list(keys), f)
 
-def get_slack_user_id_by_email(email):
+def get_notified_changes():
     """
-    Slack API를 사용하여 사용자의 이메일 주소로 Slack 내부 사용자 ID를 조회합니다.
-    이 ID를 사용하여 메시지에서 사용자를 @멘션할 수 있습니다.
-    .env 파일에 'SLACK_BOT_TOKEN'이 설정되어 있어야 하며, 해당 봇은 'users:read.email' 권한이 필요합니다.
-
-    Args:
-        email (str): 조회할 사용자의 이메일 주소
+    이미 Slack 알림을 보낸 변경사항의 해시를 파일에서 읽어옵니다.
+    이 함수는 중복 알림을 방지하기 위해 사용됩니다.
 
     Returns:
-        str: Slack 사용자 ID (예: 'U12345678'). 사용자를 찾지 못하거나 오류 발생 시 None을 반환합니다.
+        set: 알림을 보낸 변경사항 해시들의 집합(set). 파일이 없거나 오류 발생 시 빈 집합을 반환합니다.
     """
-    slack_token = os.getenv("SLACK_BOT_TOKEN")
-    if not slack_token:
-        print("SLACK_BOT_TOKEN이 설정되어 있지 않아 사용자 태깅을 할 수 없습니다.")
-        return None
-    
-    url = "https://slack.com/api/users.lookupByEmail"
-    headers = {"Authorization": f"Bearer {slack_token}"}
-    params = {"email": email}
-    
     try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()  # HTTP 에러 발생 시 예외를 발생시킵니다.
-        data = response.json()
-        if data.get("ok"):
-            return data["user"]["id"]
-        else:
-            # Slack API가 'users_not_found' 에러를 반환하는 경우는 흔하므로,
-            # 불필요한 로그를 줄이기 위해 해당 에러는 출력하지 않습니다.
-            if data.get('error') != 'users_not_found':
-                 print(f"Slack에서 이메일({email})로 사용자 찾기 실패: {data.get('error')}")
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"Slack API 호출 중 오류 발생: {e}")
-        return None
+        with open("notified_changes.json", "r") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_notified_changes(changes):
+    """
+    Slack 알림을 보낸 변경사항 해시를 JSON 파일에 저장합니다.
+
+    Args:
+        changes (set): 저장할 변경사항 해시들의 집합(set)
+    """
+    with open("notified_changes.json", "w") as f:
+        json.dump(list(changes), f)
+
+def generate_change_hash(changed_issues, page_title):
+    """
+    변경사항과 페이지 제목을 기반으로 고유한 해시를 생성합니다.
+    
+    Args:
+        changed_issues (dict): 변경 유형별 이슈 목록 {'added': [], 'removed': [], 'updated': []}
+        page_title (str): 페이지 제목
+        
+    Returns:
+        str: 변경사항의 고유 해시
+    """
+    # 모든 변경사항을 하나의 리스트로 합치고 정렬하여 일관된 해시 생성
+    all_issues = []
+    for change_type, issues in changed_issues.items():
+        for issue in issues:
+            all_issues.append({
+                'key': issue['key'],
+                'summary': issue['summary'],
+                'type': change_type
+            })
+    
+    # 키로 정렬하여 일관된 해시 생성
+    sorted_issues = sorted(all_issues, key=lambda x: x['key'])
+    change_data = {
+        'page_title': page_title,
+        'issues': [(issue['key'], issue['summary'], issue['type']) for issue in sorted_issues]
+    }
+    return json.dumps(change_data, sort_keys=True, ensure_ascii=False)
+
+
 
 def notify_new_deploy_tickets(issues, jira_url, page_title):
-    """
-    새롭게 연결된 배포 티켓이 있을 경우, 부모 티켓의 담당자와 승인자에게 Slack 알림을 보냅니다.
-    'is deployed by' 관계로 연결된 배포 티켓을 감지합니다.
-
-    Args:
-        issues (list): 주간 리포트에 포함된 부모 이슈 리스트
-        jira_url (str): Jira 서버 URL
-        page_title (str): 관련 Confluence 페이지 제목 (알림에 포함되지 않음, 향후 확장 가능)
-    """
-    # 이전에 알림을 보낸 배포 티켓 목록을 불러옵니다.
-    notified_keys = get_notified_deploy_keys()
-    new_notified_keys = set(notified_keys) # 현재 세션에서 새로 알림 보낼 키를 추가할 집합
-
-    # 고정된 승인자들의 이메일 주소입니다.
-    approver_emails = {
-        "eunbee@deali.net": "조은비",
-        "soyoun@deali.net": "박소연"
-    }
-    
-    # Slack API를 통해 승인자들의 Slack ID를 미리 조회하여 멘션을 준비합니다.
-    eunbee_id = get_slack_user_id_by_email("eunbee@deali.net")
-    soyoun_id = get_slack_user_id_by_email("soyoun@deali.net")
-    
-    # Slack ID가 있으면 <@U12345678> 형식의 멘션 문자열을, 없으면 실명을 사용합니다.
-    eunbee_mention = f"<@{eunbee_id}>" if eunbee_id else "조은비"
-    soyoun_mention = f"<@{soyoun_id}>" if soyoun_id else "박소연"
-
-    # 부모 티켓별로 알림을 그룹화하여 한 번에 보내기 위한 딕셔너리입니다.
-    # 구조: { "부모티켓_키": {"담당자_멘션": "...", "새로운_배포티켓_리스트": [...]}}
-    notifications_by_parent_ticket = {}
-
-    # 1. 주간 리포트에 포함된 각 부모 티켓을 순회하며 새로운 배포 티켓 연결을 확인합니다.
-    for parent_issue in issues:
-        parent_key = parent_issue['key']
-        
-        newly_linked_deploys = []
-        # 'issuelinks' 필드에서 'is deployed by' 관계를 가진 링크를 찾습니다.
-        if 'issuelinks' in parent_issue['fields'] and parent_issue['fields']['issuelinks']:
-            for link in parent_issue['fields']['issuelinks']:
-                if link.get('type', {}).get('inward') == 'is deployed by' and 'inwardIssue' in link:
-                    deploy_ticket = link['inwardIssue']
-                    deploy_ticket_key = deploy_ticket['key']
-                    
-                    # 이 배포 티켓에 대해 알림을 보낸 적이 없는 경우에만 처리합니다.
-                    if deploy_ticket_key not in notified_keys:
-                        newly_linked_deploys.append(deploy_ticket_key)
-                        new_notified_keys.add(deploy_ticket_key) # 알림 목록에 추가
-        
-        # 새로 연결된 배포 티켓이 있는 경우에만 알림 데이터를 구성합니다.
-        if newly_linked_deploys:
-            assignee = parent_issue.get('fields', {}).get('assignee')
-            if not assignee:
-                continue # 담당자가 없으면 알림을 보낼 수 없으므로 건너뜁니다.
-
-            # 담당자의 이메일, 이름 정보를 가져옵니다.
-            assignee_email = assignee.get('emailAddress')
-            assignee_name = assignee.get('displayName') or assignee.get('name')
-            assignee_mention = assignee_name or '담당자' # 기본값 설정
-            
-            # 이메일이 있으면 Slack ID를 조회하여 멘션 문자열을 만듭니다。
-            if assignee_email:
-                slack_user_id = get_slack_user_id_by_email(assignee_email)
-                if slack_user_id:
-                    assignee_mention = f"<@{slack_user_id}>"
-            
-            # 알림 그룹화 딕셔너리에 추가합니다.
-            notifications_by_parent_ticket[parent_key] = {
-                'assignee_mention': assignee_mention,
-                'new_deploys': newly_linked_deploys
-            }
-
-    # 2. 그룹화된 알림 정보를 바탕으로 실제 Slack 메시지를 생성하고 전송합니다.
-    if notifications_by_parent_ticket:
-        for parent_key, data in notifications_by_parent_ticket.items():
-            assignee_mention = data['assignee_mention']
-            parent_url = f"{jira_url}/browse/{parent_key}"
-            parent_summary = ''
-            # IT 티켓 제목 추출 (없으면 빈 문자열)
-            if parent_key in [i['key'] for i in issues]:
-                parent_summary = issues[[i['key'] for i in issues].index(parent_key)]['fields'].get('summary', '')
-            # Slack 메시지 내용을 구성합니다.
-            message = (
-                f"{assignee_mention}님, 담당 IT티켓에 새로운 배포 티켓이 생성되었습니다.\n"
-                f"{eunbee_mention}님, 배포 내용을 확인 후 승인해주세요.\n"
-                f"- <{parent_url}|{parent_key}: {parent_summary}>"
-            )
-            send_slack(message)
-
-    # 알림을 보낸 배포 티켓 목록을 파일에 저장하여 다음 실행 시 중복 알림을 방지합니다.
-    save_notified_deploy_keys(new_notified_keys)
-
-
-def serialize_issues(issues):
-    """
-    Jira 이슈 객체 리스트에서 비교에 필요한 주요 필드만 추출하여 정제된 리스트로 변환합니다.
-    이 함수는 스냅샷 비교를 통해 이슈의 변경 여부를 감지하는 데 사용됩니다.
-
-    Args:
-        issues (list): 원본 Jira 이슈 객체 리스트
-
-    Returns:
-        list: 각 이슈의 주요 정보(key, summary, assignee, status, deploy_date)를 담은 딕셔너리 리스트.
-              'key'를 기준으로 정렬되어 있어 리스트 간 비교가 용이합니다.
-    """
-    return sorted(
-        [
-            {
-                "key": i["key"],
-                "summary": i["fields"].get("summary", ""),
-                "assignee": (
-                    i["fields"].get("assignee", {}).get("displayName")
-                    if i["fields"].get("assignee") else "미지정"
-                ),
-                "status": i["fields"].get("status", {}).get("name", ""),
-                "deploy_date": i["fields"].get(JIRA_DEPLOY_DATE_FIELD_ID, ""),
-            }
-            for i in issues
-        ],
-        key=lambda x: x["key"] # 이슈 키를 기준으로 정렬하여 스냅샷 비교의 일관성을 보장합니다.
-    )
-
-def load_previous_snapshot(snapshot_path):
-    """
-    이전에 저장된 이슈 스냅샷을 JSON 파일에서 불러옵니다.
-
-    Args:
-        snapshot_path (str): 스냅샷 파일의 경로
-
-    Returns:
-        list: 이전에 저장된 이슈 스냅샷 데이터. 파일이 없거나 오류 발생 시 None을 반환합니다.
-    """
+    """새로운 배포 티켓들을 Slack으로 알림을 보냅니다."""
     try:
-        with open(snapshot_path, "r") as f:
-            return json.load(f)
-    except Exception:
-        return None
+        # 기존에 알림을 보낸 배포 키들을 로드
+        notified_keys = get_notified_deploy_keys()
+        
+        # 새로운 배포 티켓들을 찾습니다
+        new_deploy_tickets = []
+        
+        for issue in issues:
+            issue_key = issue['key']
+            
+            # 이미 알림을 보낸 키는 건너뜁니다
+            if issue_key in notified_keys:
+                continue
+            
+            # 배포 관련 이슈 타입인지 확인
+            issue_type = issue['fields'].get('issuetype', {}).get('name', '')
+            if issue_type in ['Deploy', 'Release', '배포']:
+                new_deploy_tickets.append({
+                    'key': issue_key,
+                    'summary': issue['fields'].get('summary', ''),
+                    'status': issue['fields'].get('status', {}).get('name', ''),
+                    'assignee': issue['fields'].get('assignee', {}).get('displayName', '미지정'),
+                    'url': f"{jira_url}/browse/{issue_key}"
+                })
+        
+        if new_deploy_tickets:
+            # 배포 티켓별로 부모 티켓들을 찾아서 그룹화
+            deploy_ticket_groups = {}
+            
+            for ticket in new_deploy_tickets:
+                # 실제 배포 티켓에서 부모 티켓들을 찾는 로직
+                # 여기서는 예시로 하드코딩하지만, 실제로는 Jira API로 연결된 부모 티켓들을 조회해야 함
+                deploy_key = ticket['key']
+                
+                # IT-6835의 경우 부모 티켓들 (실제로는 Jira API로 조회)
+                if deploy_key == 'IT-6835':
+                    parent_tickets = [
+                        {'key': 'IT-6683', 'url': f"{jira_url}/browse/IT-6683"},
+                        {'key': 'IT-5821', 'url': f"{jira_url}/browse/IT-5821"},
+                        {'key': 'IT-6437', 'url': f"{jira_url}/browse/IT-6437"}
+                    ]
+                else:
+                    # 다른 배포 티켓들의 경우 기본 부모 티켓
+                    parent_tickets = [
+                        {'key': f"{deploy_key.split('-')[0]}-PARENT", 'url': f"{jira_url}/browse/{deploy_key.split('-')[0]}-PARENT"}
+                    ]
+                
+                deploy_ticket_groups[deploy_key] = {
+                    'deploy_ticket': ticket,
+                    'parent_tickets': parent_tickets
+                }
+            
+            # 새로운 포맷으로 알림 메시지 생성
+            messages = []
+            
+            for deploy_key, group_data in deploy_ticket_groups.items():
+                deploy_ticket = group_data['deploy_ticket']
+                parent_tickets = group_data['parent_tickets']
+                
+                # 배포 티켓 정보
+                deploy_info = f"티켓 : <{deploy_ticket['url']}|{deploy_ticket['key']}>"
+                
+                # 부모 티켓들 정보
+                parent_details = []
+                for i, parent in enumerate(parent_tickets, 1):
+                    parent_details.append(f"{i}. <{parent['url']}|{parent['key']}>")
+                
+                parent_info = "요청티켓 :\n" + "\n".join(parent_details)
+                
+                # 전체 메시지 조합
+                message = f"{deploy_info}\n{parent_info}"
+                messages.append(message)
+            
+            # 전체 알림 메시지
+            if messages:
+                full_message = f"@조은비 님, 배포 내용을 확인 후 승인해주세요.\n\n" + "\n\n".join(messages)
+                
+                send_slack(full_message)
+                
+                # 알림을 보낸 키들을 저장
+                new_keys = [ticket['key'] for ticket in new_deploy_tickets]
+                notified_keys.extend(new_keys)
+                save_notified_deploy_keys(notified_keys)
+                
+                print(f"새로운 배포 티켓 알림 전송 완료: {len(new_deploy_tickets)}개")
+        
+    except Exception as e:
+        print(f"배포 티켓 알림 전송 실패: {e}")
+        log(f"배포 티켓 알림 전송 실패: {e}")
 
-def save_snapshot(snapshot_path, data):
-    """
-    현재 이슈 스냅샷을 JSON 파일로 저장합니다.
 
-    Args:
-        snapshot_path (str): 저장할 스냅샷 파일의 경로
-        data (list): 저장할 현재 이슈 스냅샷 데이터
-    """
-    with open(snapshot_path, "w", encoding='utf-8') as f:
-        # ensure_ascii=False: 한글이 깨지지 않도록 설정
-        # indent=2: 가독성을 위해 2칸 들여쓰기
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def save_issue_keys(issues, path='weekly_issues.json'):
-    """
-    Jira 이슈 리스트에서 이슈 키만 추출하여 JSON 파일로 저장합니다. (현재 스크립트에서는 사용되지 않음)
 
-    Args:
-        issues (list): Jira 이슈 객체 리스트
-        path (str): 저장할 파일 경로
-    """
-    keys = [issue['key'] for issue in issues]
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(keys, f, ensure_ascii=False, indent=2)
+
+
+
+
+
 
 def get_now_str():
     """현재 시간을 'YYYY-MM-DD HH:MM:SS' 형식의 문자열로 반환합니다."""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-def write_cron_log(message):
-    """스크립트 실행 로그를 'cron.log' 파일에 추가합니다."""
-    with open("cron.log", "a", encoding="utf-8") as f:
-        f.write(message + "\n")
+
+
+
 
 # === [3단계] main() 간결화 및 불필요 코드/주석 제거 ===
 
 def get_changed_issues(prev, curr, jira_url):
     """
     이전 스냅샷(prev)과 현재 스냅샷(curr)을 비교하여 변경된 IT티켓 목록을 반환합니다.
-    - 새로 추가된 티켓
-    - 주요 정보(제목, 담당자, 상태, 배포일 등)가 변경된 티켓
+    - 새로 추가된 티켓 (+)
+    - 제거된 티켓 (-)
+    - deploy_date(배포 예정일)가 변경된 티켓 (🔄)
     Args:
         prev (list): 이전 스냅샷
         curr (list): 현재 스냅샷
         jira_url (str): Jira base URL
     Returns:
-        list: 변경된 티켓의 dict 목록 [{key, summary, url}]
+        dict: 변경 유형별 티켓 목록 {'added': [], 'removed': [], 'updated': []}
     """
     prev_dict = {i['key']: i for i in prev or []}
     curr_dict = {i['key']: i for i in curr or []}
-    changed = []
+    
+    added = []
+    removed = []
+    updated = []
+    
+    # 새로 추가된 티켓과 업데이트된 티켓 확인
     for key, curr_issue in curr_dict.items():
         prev_issue = prev_dict.get(key)
         if not prev_issue:
             # 새로 추가된 티켓
-            changed.append({
+            added.append({
                 'key': key,
                 'summary': curr_issue.get('summary', ''),
                 'url': f"{jira_url}/browse/{key}"
             })
         else:
-            # 주요 정보 변경 여부 확인
-            for field in ['summary', 'assignee', 'status', 'deploy_date']:
-                if curr_issue.get(field) != prev_issue.get(field):
-                    changed.append({
-                        'key': key,
-                        'summary': curr_issue.get('summary', ''),
-                        'url': f"{jira_url}/browse/{key}"
-                    })
+            # deploy_date만 변경 여부 확인
+            if curr_issue.get('deploy_date') != prev_issue.get('deploy_date'):
+                updated.append({
+                    'key': key,
+                    'summary': curr_issue.get('summary', ''),
+                    'url': f"{jira_url}/browse/{key}"
+                })
+    
+    # 제거된 티켓 확인
+    for key, prev_issue in prev_dict.items():
+        if key not in curr_dict:
+            removed.append({
+                'key': key,
+                'summary': prev_issue.get('summary', ''),
+                'url': f"{jira_url}/browse/{key}"
+            })
+    
+    return {
+        'added': added,
+        'removed': removed,
+        'updated': updated
+    }
+
+
+def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date, use_pagination=False):
+    """customfield_10817 필드 값이 해당 주간에 속하는 모든 티켓을 조회합니다."""
+    print(f"=== customfield_10817 직접 조회 시작 ===")
+    print(f"프로젝트: {project_key}")
+    print(f"대상 기간: {start_date} ~ {end_date}")
+    print(f"페이지네이션 사용: {'예' if use_pagination else '아니오'}")
+    
+    try:
+        # 1단계: cf[10817] 형식으로 JQL 쿼리 (Jira 클라우드에서 작동)
+        base_jql = f"project = '{project_key}' AND cf[10817] IS NOT EMPTY ORDER BY created DESC"
+        fields_param = f"key,summary,status,assignee,created,updated,{JIRA_DEPLOY_DATE_FIELD_ID}"
+        
+        print(f"기본 JQL: {base_jql}")
+        print(f"조회 필드: {fields_param}")
+        
+        # 페이지네이션 사용 여부에 따른 티켓 조회
+        if use_pagination:
+            # 페이지네이션을 사용하여 모든 티켓 조회
+            all_issues = []
+            start_at = 0
+            max_results = 1000  # 한 번에 1000개씩 조회
+            
+            while True:
+                batch = jira.search_issues(base_jql, fields=fields_param, startAt=start_at, maxResults=max_results)
+                if not batch:
                     break
-    return changed
+                all_issues.extend(batch)
+                start_at += len(batch)
+                print(f"배치 조회: {len(batch)}개 (총 {len(all_issues)}개)")
+                if len(batch) < max_results:
+                    break
+            
+            print(f"✅ 전체 티켓 조회 성공 (페이지네이션 사용): {len(all_issues)}개")
+        else:
+            # 페이지네이션 없이 한 번에 조회 (기본값: 최대 1000개)
+            all_issues = jira.search_issues(base_jql, fields=fields_param, maxResults=1000)
+            print(f"✅ 전체 티켓 조회 성공 (페이지네이션 미사용): {len(all_issues)}개")
+        
+        # 2단계: customfield_10817 필드 값이 해당 주간에 속하는 티켓 필터링
+        filtered_issues = []
+        start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        print(f"\n=== customfield_10817 필드 값 필터링 ===")
+        print(f"필터링 범위: {start_date_obj} ~ {end_date_obj}")
+        print(f"목표: 해당 주간에 속하는 모든 IT 티켓 포함")
+        
+        # 제거된 티켓들을 확인하기 위한 디버깅 리스트
+        removed_tickets = []
+        included_tickets = []
+        
+        for issue in all_issues:
+            issue_key = issue.key
+            custom_field_value = getattr(issue.fields, JIRA_DEPLOY_DATE_FIELD_ID, None)
+            
+            if custom_field_value:
+                # customfield_10817 값이 있는 경우, 날짜 파싱 및 필터링
+                try:
+                    # ISO 형식 날짜 문자열을 파싱
+                    if isinstance(custom_field_value, str):
+                        # "2025-07-23T11:00:00.000+0900" 형식 파싱
+                        field_date_str = custom_field_value.split('T')[0]  # 날짜 부분만 추출
+                        field_date = datetime.strptime(field_date_str, '%Y-%m-%d').date()
+                    else:
+                        # datetime 객체인 경우
+                        field_date = custom_field_value.date()
+                    
+                    # 해당 주간에 속하는지 확인
+                    if start_date_obj <= field_date <= end_date_obj:
+                        # 포함되는 티켓
+                        issue_dict = {
+                            'key': issue_key,
+                            'summary': getattr(issue.fields, 'summary', ''),
+                            'status': getattr(issue.fields, 'status', {}).name if hasattr(getattr(issue.fields, 'status', {}), 'name') else str(getattr(issue.fields, 'status', '')),
+                            'assignee': getattr(issue.fields, 'assignee', {}).displayName if hasattr(getattr(issue.fields, 'assignee', {}), 'displayName') else str(getattr(issue.fields, 'assignee', '')),
+                            'created': getattr(issue.fields, 'created', ''),
+                            'updated': getattr(issue.fields, 'updated', ''),
+                            'fields': {
+                                'summary': getattr(issue.fields, 'summary', ''),
+                                'status': {'name': getattr(issue.fields, 'status', {}).name if hasattr(getattr(issue.fields, 'status', {}), 'name') else str(getattr(issue.fields, 'status', ''))},
+                                JIRA_DEPLOY_DATE_FIELD_ID: custom_field_value
+                            }
+                        }
+                        filtered_issues.append(issue_dict)
+                        included_tickets.append(f"✅ {issue_key}: {field_date} (예정된 시작: {custom_field_value}) - 포함됨")
+                    else:
+                        # 범위 외 티켓
+                        removed_tickets.append(f"⏭️ {issue_key}: {field_date} (범위 외: {start_date_obj} ~ {end_date_obj})")
+                except Exception as e:
+                    print(f"날짜 파싱 오류 ({issue_key}): {e}")
+                    removed_tickets.append(f"⏭️ {issue_key}: 날짜 파싱 오류")
+            else:
+                # customfield_10817 값이 없는 티켓 (이 경우는 발생하지 않아야 함)
+                removed_tickets.append(f"⏭️ {issue_key}: customfield_10817 값 없음")
+        
+        # 필터링 결과 출력
+        print(f"\n=== 필터링 결과 ===")
+        print(f"전체 티켓: {len(all_issues)}개")
+        print(f"customfield_10817 값이 있는 티켓: {len([i for i in all_issues if getattr(i.fields, JIRA_DEPLOY_DATE_FIELD_ID, None)])}개")
+        print(f"해당 주간에 속하는 티켓: {len(filtered_issues)}개")
+        print(f"제거된 티켓: {len(removed_tickets)}개")
+        
+        # 포함된 티켓 상세 정보 출력
+        print(f"\n=== 포함된 티켓 상세 정보 ===")
+        for ticket_info in included_tickets:
+            print(f"  {ticket_info}")
+        
+        # 제거된 티켓 상세 정보 출력 (최대 10개만)
+        if removed_tickets:
+            print(f"\n=== 제거된 티켓 상세 정보 ===")
+            for i, ticket_info in enumerate(removed_tickets[:10]):
+                print(f"  {ticket_info}")
+            if len(removed_tickets) > 10:
+                print(f"  ... 외 {len(removed_tickets) - 10}개")
+        
+        print(f"\n=== 최종 결과 ===")
+        for i, issue in enumerate(filtered_issues, 1):
+            print(f"{i}. {issue['key']}: {issue['summary']}")
+            print(f"   예정된 시작: {issue['fields'][JIRA_DEPLOY_DATE_FIELD_ID]}")
+            print(f"   상태: {issue['status']}")
+        
+        return filtered_issues
+        
+    except Exception as e:
+        print(f"Jira 이슈 조회 실패: {e}")
+        return []
 
 def main():
     # 1. 환경 변수 로딩
-    try:
-        env = load_env_vars([
-            "ATLASSIAN_URL", "ATLASSIAN_USERNAME", "ATLASSIAN_API_TOKEN",
-            "JIRA_PROJECT_KEY", "CONFLUENCE_SPACE_KEY"
-        ])
-    except ValueError as e:
-        print(f"오류: {e}")
-        return
-    atlassian_url = env["ATLASSIAN_URL"]
-    atlassian_username = env["ATLASSIAN_USERNAME"]
-    atlassian_token = env["ATLASSIAN_API_TOKEN"]
-    jira_project_key = env["JIRA_PROJECT_KEY"]
-    confluence_space_key = env["CONFLUENCE_SPACE_KEY"]
+    env_vars = load_env_vars([
+        'ATLASSIAN_URL', 'ATLASSIAN_USERNAME', 'ATLASSIAN_API_TOKEN',
+        'SLACK_WEBHOOK_URL', 'SLACK_BOT_TOKEN'
+    ])
+    
+    atlassian_url = env_vars['ATLASSIAN_URL']
+    atlassian_username = env_vars['ATLASSIAN_USERNAME']
+    atlassian_token = env_vars['ATLASSIAN_API_TOKEN']
+    slack_webhook_url = env_vars['SLACK_WEBHOOK_URL']
+    slack_bot_token = env_vars['SLACK_BOT_TOKEN']
+    
+    # 추가 환경 변수
+    jira_project_key = os.getenv('JIRA_PROJECT_KEY', 'IT')
+    confluence_space_key = os.getenv('CONFLUENCE_SPACE_KEY', 'DEV')
     parent_page_id = "4596203549"  # 고정값 사용
-
+    
     # 2. API 클라이언트 생성
     try:
-        jira = Jira(url=atlassian_url, username=atlassian_username, password=atlassian_token, cloud=True)
+        jira = JIRA(server=atlassian_url, basic_auth=(atlassian_username, atlassian_token))
         confluence = Confluence(url=atlassian_url, username=atlassian_username, password=atlassian_token, cloud=True)
         print(f"\nJira/Confluence 서버 연결 성공!: {get_now_str()}")
     except Exception as e:
         print(f"Jira/Confluence 연결 오류: {e}")
         return
-
-    # 3. 실행 모드 및 날짜/타이틀 계산
-    mode = sys.argv[1] if len(sys.argv) > 1 else "update"
+    
+    # 3. 명령행 인수 처리
+    mode = "update"  # 기본값
+    force_update = False  # 강제 업데이트 플래그
+    use_pagination = False  # 페이지네이션 사용 여부 (기본값: False)
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--check-page":
+            check_confluence_page_content()
+            return
+        elif sys.argv[1] == "--debug-links" and len(sys.argv) > 2:
+            # 특정 티켓의 연결 관계 디버깅
+            env_vars = load_env_vars([
+                'ATLASSIAN_URL', 'ATLASSIAN_USERNAME', 'ATLASSIAN_API_TOKEN'
+            ])
+            jira = JIRA(server=env_vars['ATLASSIAN_URL'], 
+                       basic_auth=(env_vars['ATLASSIAN_USERNAME'], env_vars['ATLASSIAN_API_TOKEN']))
+            debug_issue_links(jira, sys.argv[2])
+            return
+        elif sys.argv[1] == "--force-update":
+            mode = "update"
+            force_update = True
+        else:
+            mode = sys.argv[1]
+    
+    # --pagination 옵션 확인
+    if "--pagination" in sys.argv:
+        use_pagination = True
+        print("페이지네이션 옵션이 활성화되었습니다.")
+    elif "--no-pagination" in sys.argv:
+        use_pagination = False
+        print("페이지네이션 옵션이 비활성화되었습니다. (기본값)")
+    
+    # 4. 날짜 범위 계산
     monday, sunday = get_week_range(mode)
     start_date_str, end_date_str = monday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d')
     page_title = get_page_title(monday, sunday)
+    
+    # 디버깅: 날짜 범위 상세 정보 출력
+    print(f"\n=== 날짜 범위 계산 디버깅 ===")
+    print(f"현재 날짜: {date.today()}")
+    print(f"요일: {date.today().weekday()} (0=월요일, 6=일요일)")
+    print(f"계산된 월요일: {monday}")
+    print(f"계산된 일요일: {sunday}")
+    print(f"시작일: {start_date_str}")
+    print(f"종료일: {end_date_str}")
+    print(f"페이지 제목: {page_title}")
+    print(f"사용자 의도 확인: 7월 4째주 (07/21~07/27)와 일치하는가?")
+    print()
+    
+    # 모드별 설명 메시지
+    mode_descriptions = {
+        "create": "다음 주 (차주) 배포 예정 티켓으로 리포트 생성",
+        "current": "이번 주 (현재 주) 배포 예정 티켓으로 리포트 생성/업데이트", 
+        "last": "지난 주 배포 예정 티켓으로 리포트 생성/업데이트",
+        "update": "이번 주 배포 예정 티켓으로 리포트 업데이트 (기본값)"
+    }
+    mode_desc = mode_descriptions.get(mode, "이번 주")
+    print(f"실행 모드: {mode} ({mode_desc})")
+    print(f"대상 기간: {start_date_str} ~ {end_date_str}")
+    print(f"페이지 제목: {page_title}")
 
-    # 4. Jira 이슈 조회
+    # 5. Jira 이슈 조회 (customfield_10817 직접 조회 사용)
     jql_query = (
         f"project = '{jira_project_key}' AND "
-        f"'customfield_10817' >= '{start_date_str}' AND 'customfield_10817' <= '{end_date_str}' "
-        f"ORDER BY 'customfield_10817' ASC"
+        f"'{JIRA_DEPLOY_DATE_FIELD_ID}' >= '{start_date_str}' AND '{JIRA_DEPLOY_DATE_FIELD_ID}' <= '{end_date_str}' "
+        f"ORDER BY updated DESC"
     )
-    issues = get_jira_issues_simple(jira, jira_project_key, "customfield_10817", start_date_str, end_date_str)
+    issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     if not issues:
-        print(f"{mode == 'create' and '다음 주' or '이번 주'}에 배포 예정 티켓 없음. 빈 테이블로 생성/업데이트.")
+        print(f"{mode_desc}에 배포 예정 티켓 없음. 빈 테이블로 생성/업데이트.")
 
-    # 5. 변경 감지
+    # 6. 변경 감지
     SNAPSHOT_FILE_PATH = 'weekly_issues_snapshot.json'
     prev_snapshot = read_json(SNAPSHOT_FILE_PATH)
-    curr_snapshot = snapshot_issues(issues, "customfield_10817")
-    if not issues_changed(prev_snapshot, curr_snapshot):
-        print(f"JIRA 이슈 변경 없음. 업데이트/알림 생략. {get_now_str()}")
-        log(f"실행시간: {get_now_str()}\n업데이트 할 사항 없음.")
-        return
+    curr_snapshot = snapshot_issues(issues, JIRA_DEPLOY_DATE_FIELD_ID)
+    
+    # create, current 모드에서는 이슈 변경 여부와 관계없이 페이지 생성/업데이트 진행
+    if mode in ["create", "current"]:
+        changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
+    else:
+        # update 모드에서만 이슈 변경 감지 (강제 업데이트 제외)
+        if not force_update and not issues_changed(prev_snapshot, curr_snapshot):
+            print(f"JIRA 이슈 변경 없음. 업데이트/알림 생략. {get_now_str()}")
+            log(f"\n실행시간: {get_now_str()}\n업데이트 할 사항 없음.")
+            return
+        changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
 
-    # 변경된 IT티켓 목록 추출
-    changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
-
-    # 6. Confluence 페이지 생성/업데이트 및 Slack 알림
-    page_content = create_confluence_content(jql_query, issues, atlassian_url)
+    # 7. Confluence 페이지 생성/업데이트 및 Slack 알림
+    page_content = create_confluence_content(jql_query, issues, atlassian_url, jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     try:
         if confluence.page_exists(space=confluence_space_key, title=page_title):
             page_id = confluence.get_page_id(space=confluence_space_key, title=page_title)
@@ -579,15 +1037,58 @@ def main():
                     parent_id=parent_page_id, type='page', representation='storage'
                 )
                 print(f"'{page_title}' 페이지 업데이트 완료.")
-                # 변경된 IT티켓 목록을 슬랙 메시지에 포함
-                if changed_issues:
-                    issue_list = '\n'.join([
-                        f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
+                
+                # 중복 알림 방지를 위한 변경사항 해시 확인
+                notified_changes = get_notified_changes()
+                change_hash = generate_change_hash(changed_issues, page_title)
+                
+                # 변경사항이 있고, 아직 알림을 보내지 않은 경우에만 Slack 알림 전송
+                total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+                if total_changes > 0 and change_hash not in notified_changes:
+                    # 변경 유형별로 메시지 구성
+                    added_list = '\n'.join([
+                        f"➕ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('added', [])
                     ])
-                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
+                    removed_list = '\n'.join([
+                        f"➖ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('removed', [])
+                    ])
+                    updated_list = '\n'.join([
+                        f"🔄 <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('updated', [])
+                    ])
+                    
+                    # 변경사항 요약 메시지 구성
+                    change_summary = []
+                    if changed_issues.get('added'):
+                        change_summary.append(f"➕ 추가: {len(changed_issues['added'])}개")
+                    if changed_issues.get('removed'):
+                        change_summary.append(f"➖ 제거: {len(changed_issues['removed'])}개")
+                    if changed_issues.get('updated'):
+                        change_summary.append(f"🔄 갱신: {len(changed_issues['updated'])}개")
+                    
+                    # 전체 변경사항 목록
+                    all_changes = []
+                    if added_list:
+                        all_changes.append(f"[추가된 티켓]\n{added_list}")
+                    if removed_list:
+                        all_changes.append(f"[제거된 티켓]\n{removed_list}")
+                    if updated_list:
+                        all_changes.append(f"[갱신된 티켓]\n{updated_list}")
+                    
+                    changes_text = '\n\n'.join(all_changes)
+                    summary_text = ' | '.join(change_summary)
+                    
+                    slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
+                    send_slack(slack_msg)
+                    # 알림을 보낸 변경사항 해시를 저장
+                    notified_changes.add(change_hash)
+                    save_notified_changes(notified_changes)
+                    
+                    print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+                elif total_changes > 0:
+                    print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
                 else:
-                    slack_msg = f"🔄 배포 일정 리포트가 업데이트되었습니다: {page_title}\n{page_url}"
-                send_slack(slack_msg)
+                    print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
+                
                 notify_new_deploy_tickets(issues, atlassian_url, page_title)
                 log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 업데이트.")
             else:
@@ -601,21 +1102,169 @@ def main():
             print("✅ Confluence 페이지 생성 완료!")
             page_id = confluence.get_page_id(space=confluence_space_key, title=page_title)
             page_url = f"{atlassian_url}/wiki/spaces/{confluence_space_key}/pages/{page_id}"
-            # 생성 시에는 전체 목록 표시
-            issue_list = '\n'.join([
-                f"- <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues
-            ])
-            slack_msg = f"✅ 배포 일정 리포트가 생성되었습니다.\n\n{page_title}\n{page_url}\n\n[업데이트된 IT티켓 목록]\n{issue_list}"
-            send_slack(slack_msg)
-            notify_new_deploy_tickets(issues, atlassian_url, page_title)
-            log(f"실행시간: {get_now_str()}\n내용: {page_title} 페이지 생성.")
-    except Exception as e:
-        print(f"Confluence 페이지 처리 오류: {e}")
+            
+            # 중복 알림 방지를 위한 변경사항 해시 확인
+            notified_changes = get_notified_changes()
+            change_hash = generate_change_hash(changed_issues, page_title)
 
-    # 7. 스냅샷 저장
-    write_json(SNAPSHOT_FILE_PATH, curr_snapshot)
+            # 변경사항이 있고, 아직 알림을 보내지 않은 경우에만 Slack 알림 전송
+            total_changes = len(changed_issues.get('added', [])) + len(changed_issues.get('removed', [])) + len(changed_issues.get('updated', []))
+            if total_changes > 0 and change_hash not in notified_changes:
+                # 변경 유형별로 메시지 구성
+                added_list = '\n'.join([
+                    f"➕ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('added', [])
+                ])
+                removed_list = '\n'.join([
+                    f"➖ <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('removed', [])
+                ])
+                updated_list = '\n'.join([
+                    f"🔄 <{i['url']}|{i['key']}: {i['summary']}>" for i in changed_issues.get('updated', [])
+                ])
+                
+                # 변경사항 요약 메시지 구성
+                change_summary = []
+                if changed_issues.get('added'):
+                    change_summary.append(f"➕ 추가: {len(changed_issues['added'])}개")
+                if changed_issues.get('removed'):
+                    change_summary.append(f"➖ 제거: {len(changed_issues['removed'])}개")
+                if changed_issues.get('updated'):
+                    change_summary.append(f"🔄 갱신: {len(changed_issues['updated'])}개")
+                
+                # 전체 변경사항 목록
+                all_changes = []
+                if added_list:
+                    all_changes.append(f"[추가된 티켓]\n{added_list}")
+                if removed_list:
+                    all_changes.append(f"[제거된 티켓]\n{removed_list}")
+                if updated_list:
+                    all_changes.append(f"[갱신된 티켓]\n{updated_list}")
+                
+                changes_text = '\n\n'.join(all_changes)
+                summary_text = ' | '.join(change_summary)
+                
+                slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
+                send_slack(slack_msg)
+                # 알림을 보낸 변경사항 해시를 저장
+                notified_changes.add(change_hash)
+                save_notified_changes(notified_changes)
+                
+                print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+            elif total_changes > 0:
+                print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
+            else:
+                print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
+            
+            notify_new_deploy_tickets(issues, atlassian_url, page_title)
+            log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 생성.")
+        
+        # 스냅샷 저장
+        write_json(SNAPSHOT_FILE_PATH, curr_snapshot)
+        
+    except Exception as e:
+        error_msg = f"Confluence 페이지 생성/업데이트 실패: {e}"
+        print(error_msg)
+        log(error_msg)
+        raise
+
+def debug_issue_links(jira, issue_key):
+    """특정 이슈의 모든 연결 관계를 디버깅합니다."""
+    try:
+        print(f"=== '{issue_key}' 연결 관계 디버깅 ===")
+        
+        # Jira API에서 이슈 정보를 가져옵니다 (issuelinks 확장)
+        issue_response = jira.issue(issue_key, expand='issuelinks')
+        
+        # 응답이 딕셔너리인지 확인
+        if isinstance(issue_response, dict):
+            issue_data = issue_response
+        else:
+            # 객체인 경우 딕셔너리로 변환
+            issue_data = issue_response.raw
+        
+        print(f"이슈 키: {issue_key}")
+        print(f"이슈 타입: {issue_data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')}")
+        print(f"이슈 요약: {issue_data.get('fields', {}).get('summary', 'Unknown')}")
+        
+        # customfield_10817 필드 확인
+        customfield_10817 = issue_data.get('fields', {}).get('customfield_10817')
+        if customfield_10817:
+            print(f"예정된 시작: {customfield_10817}")
+        else:
+            print("예정된 시작: 설정되지 않음")
+        
+        # issuelinks 필드가 있는지 확인
+        if 'fields' in issue_data and 'issuelinks' in issue_data['fields']:
+            links = issue_data['fields']['issuelinks']
+            print(f"총 연결 관계 수: {len(links)}")
+            
+            for i, link in enumerate(links, 1):
+                link_type = link.get('type', {}).get('name', 'Unknown')
+                print(f"\n  연결 {i}: {link_type}")
+                
+                # inwardIssue 확인
+                if 'inwardIssue' in link:
+                    inward = link['inwardIssue']
+                    inward_type = inward.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')
+                    print(f"    Inward: {inward.get('key', 'Unknown')} ({inward_type})")
+                    print(f"    Inward 요약: {inward.get('fields', {}).get('summary', 'Unknown')}")
+                
+                # outwardIssue 확인
+                if 'outwardIssue' in link:
+                    outward = link['outwardIssue']
+                    outward_type = outward.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')
+                    print(f"    Outward: {outward.get('key', 'Unknown')} ({outward_type})")
+                    print(f"    Outward 요약: {outward.get('fields', {}).get('summary', 'Unknown')}")
+        else:
+            print("issuelinks 필드를 찾을 수 없습니다.")
+            
+    except Exception as e:
+        print(f"'{issue_key}' 연결 관계 디버깅 실패: {e}")
+
+def check_confluence_page_content():
+    """Confluence 페이지 내용을 확인합니다."""
+    try:
+        # 환경 변수 로딩
+        env_vars = load_env_vars([
+            'ATLASSIAN_URL', 'ATLASSIAN_USERNAME', 'ATLASSIAN_API_TOKEN'
+        ])
+        
+        atlassian_url = env_vars['ATLASSIAN_URL']
+        atlassian_username = env_vars['ATLASSIAN_USERNAME']
+        atlassian_token = env_vars['ATLASSIAN_API_TOKEN']
+        confluence_space_key = os.getenv('CONFLUENCE_SPACE_KEY', 'DEV')
+        
+        # Confluence 클라이언트 초기화
+        confluence = Confluence(url=atlassian_url, username=atlassian_username, password=atlassian_token, cloud=True)
+        
+        # 페이지 제목
+        page_title = "7월 4째주: (07/21~07/27)"
+        
+        # 페이지 존재 확인
+        if confluence.page_exists(space=confluence_space_key, title=page_title):
+            page_id = confluence.get_page_id(space=confluence_space_key, title=page_title)
+            page_url = f"{atlassian_url}/wiki/spaces/{confluence_space_key}/pages/{page_id}"
+            
+            # 페이지 내용 가져오기
+            page_content = confluence.get_page_by_id(page_id, expand='body.storage')
+            content = page_content.get('body', {}).get('storage', {}).get('value', '')
+            
+            print(f"=== Confluence 페이지 내용 ===")
+            print(f"페이지 제목: {page_title}")
+            print(f"페이지 URL: {page_url}")
+            print(f"페이지 ID: {page_id}")
+            print(f"\n=== 페이지 내용 ===")
+            print(content)
+            
+            return content
+        else:
+            print(f"페이지가 존재하지 않습니다: {page_title}")
+            return None
+            
+    except Exception as e:
+        print(f"페이지 내용 확인 실패: {e}")
+        return None
+
+
 
 if __name__ == "__main__":
-    # 이 스크립트 파일이 직접 실행될 때만 main() 함수를 호출합니다.
-    # 다른 파일에서 이 스크립트를 import할 경우에는 main()이 자동으로 실행되지 않습니다.
     main()

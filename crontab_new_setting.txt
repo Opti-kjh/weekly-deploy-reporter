@@ -1,0 +1,13 @@
+PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin
+
+# 매주 금요일 오전 9시 30분: 다음 주 리포트 생성 (create_daily_log.py 사용)
+30 9 * * 5 /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_daily_log.py
+
+# 매주 월~금 오전 9시~오후 8시: 15분 마다 이번 주 리포트 업데이트 (create_daily_log.py 사용)
+15,30,45,0 8-21 * * 1-5 /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_daily_log.py
+
+# 화요일, 수요일 오전 11시, 오후 2시: 5분 마다 배포 티켓 업데이트 (create_daily_log.py 사용)
+5,10,15,20,25,30,35,40,45,50,55 11,14 * * 2,3 /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_daily_log.py
+
+# 선택사항: 매주 일요일 새벽 2시에 오래된 로그 파일 자동 정리 (30일 이상)
+# 0 2 * * 0 /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/log_manager.py cleanup --keep-days 30 

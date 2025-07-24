@@ -30,3 +30,9 @@ node_modules/
 
 # Specstory
 .specstory/
+
+notified_changes.json
+notified_deploy_keys.json
+weekly_issues_snapshot.json
+cron.log
+cron_test.log
