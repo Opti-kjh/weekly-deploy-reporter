@@ -356,24 +356,12 @@ crontab crontab_new_setting.txt
 - **시간 제한**: Slack 알림은 8시~21시에만 전송
 - **빠른 실행**: 기본적으로 페이지네이션 없이 빠른 실행
 
-## 🤝 기여하기
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 라이선스
-
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
 ## 📞 지원
 
 문제가 발생하거나 질문이 있으시면:
 
 1. [Issues](../../issues) 페이지에서 이슈 생성
-2. 프로젝트 담당자에게 직접 문의
+2. 프로젝트 담당자(김종호:kjh@deali.net)에게 문의
 3. 로그 파일을 확인하여 문제 진단
 4. 디버깅 모드로 실행하여 상세 정보 확인
 
