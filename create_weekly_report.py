@@ -17,12 +17,14 @@
     --force-update   - 강제 업데이트 (변경사항 없어도 업데이트)
     --check-page     - Confluence 페이지 내용 확인
     --debug-links [티켓키] - 특정 티켓의 연결 관계 디버깅
+    --test           - 테스트 모드 (Slack 알림 전송 비활성화)
 
 예시:
     python create_weekly_report.py current
     python create_weekly_report.py create --pagination
     python create_weekly_report.py update --force-update
     python create_weekly_report.py --debug-links IT-5027
+    python create_weekly_report.py current --test
 """
 
 # 필요한 외부 라이브러리와 환경 변수들을 불러옵니다.
@@ -144,7 +146,7 @@ JIRA_DATE_MACRO_TEMPLATE = '''
 # 모든 컬럼을 포함하되 날짜 포맷이 적용된 매크로
 JIRA_FULL_MACRO_TEMPLATE = '''
 <ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">key,type,summary,assignee,status,created,updated,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="columns">key,type,status,summary,assignee,created,updated,예정된 시작</ac:parameter>
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
   <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
 </ac:structured-macro>
@@ -153,11 +155,24 @@ JIRA_FULL_MACRO_TEMPLATE = '''
 # 날짜 포맷이 적용된 전체 매크로 (GitHub 최신 버전)
 JIRA_CUSTOM_DATE_FORMAT_TEMPLATE = '''
 <ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">key,type,summary,assignee,status,created,updated,예정된 시작</ac:parameter>
+  <ac:parameter ac:name="columns">key,type,status,summary,assignee,created,updated,예정된 시작</ac:parameter>
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
   <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
   <ac:parameter ac:name="maximumIssues">1000</ac:parameter>
+  <ac:parameter ac:name="showRefreshButton">true</ac:parameter>
+  <ac:parameter ac:name="showView">true</ac:parameter>
+  <ac:parameter ac:name="sortBy">updated</ac:parameter>
+  <ac:parameter ac:name="sortOrder">desc</ac:parameter>
 </ac:structured-macro>
+
+<div style="background-color: #e3f2fd; padding: 8px; border-radius: 3px; margin-top: 10px; font-size: 12px; color: #1976d2;">
+<p><strong>💡 사용 팁:</strong></p>
+<ul style="margin: 5px 0; padding-left: 20px;">
+<li>새로고침 버튼을 클릭하여 최신 데이터를 확인할 수 있습니다</li>
+<li>컬럼 헤더를 클릭하여 정렬할 수 있습니다</li>
+<li>티켓 키를 클릭하여 상세 정보를 확인할 수 있습니다</li>
+</ul>
+</div>
 '''
 
 # 배포 예정 목록 Jira 매크로 템플릿
@@ -215,8 +230,22 @@ def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_dat
 
 
 def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_key, start_date_str, end_date_str, use_pagination=False): 
-    # 날짜 포맷이 적용된 전체 매크로 사용
+    # 이슈 수 계산
+    issue_count = len(issues) if issues else 0
+    
+    # 날짜 포맷이 적용된 전체 매크로 사용 (이슈 수 포함)
     macro = JIRA_CUSTOM_DATE_FORMAT_TEMPLATE.format(jql_query=jql_query)
+    
+    # 이슈 수 표시 섹션 추가
+    issue_count_section = f'''
+<div style="background-color: #f8f9fa; padding: 12px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #007bff;">
+<h3 style="margin: 0 0 8px 0; color: #007bff;">📈 이번 주 배포 예정 이슈 현황</h3>
+<em>• 매크로 로딩 중에는 "검색된 이슈가 없습니다" 메시지가 표시될 수 있습니다<br>
+• 로딩이 완료되면 실제 이슈 목록이 표시됩니다<br>
+• 새로고침 버튼을 클릭하여 최신 데이터를 확인할 수 있습니다</em>
+</p>
+</div>
+'''
     
     # get_jira_issues_by_customfield_10817 함수를 사용하여 정확한 배포 예정 티켓 조회
     print(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===")
@@ -225,7 +254,7 @@ def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_ke
     # IT 티켓만 필터링하는 HTML 테이블 생성 (정확한 결과 사용)
     deploy_links_html_table = create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url)
     
-    return macro + deploy_links_html_table
+    return issue_count_section + macro + deploy_links_html_table
 
 def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
     """정확한 배포 예정 티켓들을 사용하여 HTML 테이블을 생성합니다."""
@@ -940,6 +969,7 @@ def main():
     mode = "update"  # 기본값
     force_update = False  # 강제 업데이트 플래그
     use_pagination = False  # 페이지네이션 사용 여부 (기본값: False)
+    test_mode = False  # 테스트 모드 플래그 (Slack 알림 비활성화)
     
     if len(sys.argv) > 1:
         if sys.argv[1] == "--check-page":
@@ -967,6 +997,11 @@ def main():
     elif "--no-pagination" in sys.argv:
         use_pagination = False
         print("페이지네이션 옵션이 비활성화되었습니다. (기본값)")
+    
+    # --test 옵션 확인 (Slack 알림 비활성화)
+    if "--test" in sys.argv:
+        test_mode = True
+        print("🧪 테스트 모드가 활성화되었습니다. Slack 알림이 전송되지 않습니다.")
     
     # 4. 날짜 범위 계산
     monday, sunday = get_week_range(mode)
@@ -1077,19 +1112,27 @@ def main():
                     changes_text = '\n\n'.join(all_changes)
                     summary_text = ' | '.join(change_summary)
                     
-                    slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
-                    send_slack(slack_msg)
-                    # 알림을 보낸 변경사항 해시를 저장
-                    notified_changes.add(change_hash)
-                    save_notified_changes(notified_changes)
-                    
-                    print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+                    # 테스트 모드가 아닌 경우에만 Slack 알림 전송
+                    if not test_mode:
+                        slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
+                        send_slack(slack_msg)
+                        # 알림을 보낸 변경사항 해시를 저장
+                        notified_changes.add(change_hash)
+                        save_notified_changes(notified_changes)
+                        
+                        print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+                    else:
+                        print(f"🧪 테스트 모드: Slack 알림 전송 생략 (변경사항: {total_changes}개)")
                 elif total_changes > 0:
                     print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
                 else:
                     print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
                 
-                notify_new_deploy_tickets(issues, atlassian_url, page_title)
+                # 테스트 모드가 아닌 경우에만 새로운 배포 티켓 알림 전송
+                if not test_mode:
+                    notify_new_deploy_tickets(issues, atlassian_url, page_title)
+                else:
+                    print("🧪 테스트 모드: 새로운 배포 티켓 알림 전송 생략")
                 log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 업데이트.")
             else:
                 print(f"'{page_title}' 페이지 내용 변경 없음. 업데이트 생략.")
@@ -1142,19 +1185,27 @@ def main():
                 changes_text = '\n\n'.join(all_changes)
                 summary_text = ' | '.join(change_summary)
                 
-                slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
-                send_slack(slack_msg)
-                # 알림을 보낸 변경사항 해시를 저장
-                notified_changes.add(change_hash)
-                save_notified_changes(notified_changes)
-                
-                print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+                # 테스트 모드가 아닌 경우에만 Slack 알림 전송
+                if not test_mode:
+                    slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
+                    send_slack(slack_msg)
+                    # 알림을 보낸 변경사항 해시를 저장
+                    notified_changes.add(change_hash)
+                    save_notified_changes(notified_changes)
+                    
+                    print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
+                else:
+                    print(f"🧪 테스트 모드: Slack 알림 전송 생략 (변경사항: {total_changes}개)")
             elif total_changes > 0:
                 print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
             else:
                 print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
             
-            notify_new_deploy_tickets(issues, atlassian_url, page_title)
+            # 테스트 모드가 아닌 경우에만 새로운 배포 티켓 알림 전송
+            if not test_mode:
+                notify_new_deploy_tickets(issues, atlassian_url, page_title)
+            else:
+                print("🧪 테스트 모드: 새로운 배포 티켓 알림 전송 생략")
             log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 생성.")
         
         # 스냅샷 저장
