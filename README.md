@@ -87,6 +87,9 @@ SLACK_BOT_TOKEN=xoxb-your-bot-token
 # 프로젝트 설정 (선택사항)
 JIRA_PROJECT_KEY=IT
 CONFLUENCE_SPACE_KEY=DEV
+
+# 배포 메시지 알림 설정 (선택사항)
+DEPLOY_MESSAGE=off  # on: 배포 승인 요청 메시지 활성화, off: 비활성화 (기본값)
 ```
 
 ### 4. Jira API 토큰 생성
@@ -166,6 +169,28 @@ parent_page_id = "4596203549"
 # 알림 전송 시간 설정 (8시~21시)
 notification_start_hour = 8
 notification_end_hour = 21
+```
+
+### 배포 메시지 알림 설정
+
+```env
+# .env 파일에서 설정
+DEPLOY_MESSAGE=off  # 기본값: 비활성화
+```
+
+**DEPLOY_MESSAGE 옵션:**
+- `on`: 배포 승인 요청 메시지 활성화
+- `off`: 배포 승인 요청 메시지 비활성화 (기본값)
+
+**사용 예시:**
+```bash
+# 배포 메시지 활성화
+export DEPLOY_MESSAGE=on
+python create_weekly_report.py
+
+# 배포 메시지 비활성화 (기본값)
+export DEPLOY_MESSAGE=off
+python create_weekly_report.py
 ```
 
 ## 📊 생성되는 리포트 구조
