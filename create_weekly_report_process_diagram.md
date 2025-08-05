@@ -200,41 +200,41 @@ flowchart TD
 ```mermaid
 graph TB
     subgraph "유틸리티 함수"
-        A1[load_env_vars] --> 환경변수 로딩
-        A2[get_week_range] --> 날짜 범위 계산
-        A3[get_page_title] --> 페이지 제목 생성
-        A4[read_json/write_json] --> 파일 I/O
-        A5[log] --> 로그 기록
+        A1[load_env_vars]
+        A2[get_week_range]
+        A3[get_page_title]
+        A4[read_json/write_json]
+        A5[log]
     end
     
     subgraph "Jira 관련 함수"
-        B1[get_jira_issues_by_customfield_10817] --> 배포 예정 티켓 조회
-        B2[get_linked_it_tickets] --> 연결된 IT 티켓 조회
-        B3[get_linked_it_tickets_with_retry] --> 재시도 로직 포함 조회
-        B4[snapshot_issues] --> 이슈 스냅샷 생성
+        B1[get_jira_issues_by_customfield_10817]
+        B2[get_linked_it_tickets]
+        B3[get_linked_it_tickets_with_retry]
+        B4[snapshot_issues]
     end
     
     subgraph "Confluence 관련 함수"
-        C1[create_confluence_content] --> 페이지 내용 생성
-        C2[create_deploy_links_html_table_with_issues] --> HTML 테이블 생성
-        C3[normalize_html_content] --> HTML 내용 정규화
+        C1[create_confluence_content]
+        C2[create_deploy_links_html_table_with_issues]
+        C3[normalize_html_content]
     end
     
     subgraph "알림 관련 함수"
-        D1[send_slack] --> Slack 알림 전송
-        D2[notify_new_deploy_tickets] --> 새로운 배포 티켓 알림
-        D3[get_notified_deploy_keys] --> 알림 이력 관리
-        D4[generate_change_hash] --> 변경사항 해시 생성
+        D1[send_slack]
+        D2[notify_new_deploy_tickets]
+        D3[get_notified_deploy_keys]
+        D4[generate_change_hash]
     end
     
     subgraph "변경 감지 함수"
-        E1[get_changed_issues] --> 변경사항 비교
-        E2[issues_changed] --> 변경 여부 확인
+        E1[get_changed_issues]
+        E2[issues_changed]
     end
     
     subgraph "디버깅 함수"
-        F1[debug_issue_links] --> 연결 관계 디버깅
-        F2[check_confluence_page_content] --> 페이지 내용 확인
+        F1[debug_issue_links]
+        F2[check_confluence_page_content]
     end
 ```
 
@@ -243,23 +243,23 @@ graph TB
 ```mermaid
 graph LR
     subgraph "필수 환경 변수"
-        A1[ATLASSIAN_URL] --> Jira/Confluence 서버 URL
-        A2[ATLASSIAN_USERNAME] --> 사용자명
-        A3[ATLASSIAN_API_TOKEN] --> API 토큰
-        A4[SLACK_WEBHOOK_URL] --> Slack Webhook URL
-        A5[SLACK_BOT_TOKEN] --> Slack Bot 토큰
+        A1[ATLASSIAN_URL]
+        A2[ATLASSIAN_USERNAME]
+        A3[ATLASSIAN_API_TOKEN]
+        A4[SLACK_WEBHOOK_URL]
+        A5[SLACK_BOT_TOKEN]
     end
     
     subgraph "선택적 환경 변수"
-        B1[JIRA_PROJECT_KEY] --> IT (기본값)
-        B2[CONFLUENCE_SPACE_KEY] --> DEV (기본값)
-        B3[DEPLOY_MESSAGE] --> off (기본값)
+        B1[JIRA_PROJECT_KEY]
+        B2[CONFLUENCE_SPACE_KEY]
+        B3[DEPLOY_MESSAGE]
     end
     
     subgraph "하드코딩된 설정"
-        C1[JIRA_DEPLOY_DATE_FIELD_ID] --> customfield_10817
-        C2[CONFLUENCE_PARENT_PAGE_TITLE] --> 25-2H 주간 배포 리스트
-        C3[parent_page_id] --> 4596203549
+        C1[JIRA_DEPLOY_DATE_FIELD_ID]
+        C2[CONFLUENCE_PARENT_PAGE_TITLE]
+        C3[parent_page_id]
     end
 ```
 
