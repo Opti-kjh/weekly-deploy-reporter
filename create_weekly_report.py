@@ -19,12 +19,20 @@
     --debug-links [티켓키] - 특정 티켓의 연결 관계 디버깅
     --test           - 테스트 모드 (Slack 알림 전송 비활성화)
 
+환경 변수:
+    LOG_LEVEL        - 로그 레벨 설정 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+                      기본값: INFO (crontab 실행 시 간략한 로그)
+    VERBOSE_LOGGING  - 상세 로그 활성화 (true/false)
+                      기본값: false (crontab 실행 시 간략한 로그)
+
 예시:
     python create_weekly_report.py current
     python create_weekly_report.py create --pagination
     python create_weekly_report.py update --force-update
     python create_weekly_report.py --debug-links IT-5027
     python create_weekly_report.py current --test
+    LOG_LEVEL=DEBUG python create_weekly_report.py current
+    VERBOSE_LOGGING=true python create_weekly_report.py current
 """
 
 # 필요한 외부 라이브러리와 환경 변수들을 불러옵니다.
@@ -54,6 +62,19 @@ JIRA_DEPLOY_DATE_FIELD_ID = "customfield_10817"  # 예정된 시작 필드 ID
 # 이 페이지 아래에 "X월 Y째주: (MM/DD~MM/DD)" 형식의 자식 페이지가 생성됩니다.
 CONFLUENCE_PARENT_PAGE_TITLE = "25-2H 주간 배포 리스트"
 
+# 로그 레벨 설정
+LOG_LEVELS = {
+    'DEBUG': 0,
+    'INFO': 1, 
+    'WARNING': 2,
+    'ERROR': 3,
+    'CRITICAL': 4
+}
+
+# 현재 로그 레벨 (환경 변수에서 읽어오거나 기본값 사용)
+CURRENT_LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+VERBOSE_LOGGING = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
+
 # ---------------------------------------------------------
 
 # === [1단계] 유틸리티 함수 및 템플릿 정의 ===
@@ -63,6 +84,24 @@ def load_env_vars(keys):
     if missing:
         raise ValueError(f"필수 환경변수 누락: {', '.join(missing)}")
     return values
+
+def should_log(level):
+    """로그 레벨에 따라 출력 여부를 결정합니다."""
+    if VERBOSE_LOGGING:
+        return True
+    return LOG_LEVELS.get(level.upper(), 1) >= LOG_LEVELS.get(CURRENT_LOG_LEVEL, 1)
+
+def log(message, level='INFO'):
+    """로그 메시지를 파일에 기록합니다."""
+    if should_log(level):
+        with open("cron.log", "a", encoding="utf-8") as f:
+            f.write(f"[{level}] {message}\n")
+
+def print_log(message, level='INFO'):
+    """로그 메시지를 콘솔에 출력하고 파일에도 기록합니다."""
+    if should_log(level):
+        print(message)
+        log(message, level)
 
 def get_week_range(mode):
     """
@@ -91,13 +130,13 @@ def get_week_range(mode):
     # 일요일은 월요일 + 6일
     sunday = monday + timedelta(days=6)
     
-    # 디버깅 정보 출력
-    print(f"=== 날짜 계산 디버깅 ===")
-    print(f"모드: {mode}")
-    print(f"현재 날짜: {today}")
-    print(f"계산된 월요일: {monday}")
-    print(f"계산된 일요일: {sunday}")
-    print(f"주간 범위: {monday.strftime('%m/%d')}~{sunday.strftime('%m/%d')}")
+    # 디버깅 정보 출력 (DEBUG 레벨로 변경)
+    print_log(f"=== 날짜 계산 디버깅 ===", 'DEBUG')
+    print_log(f"모드: {mode}", 'DEBUG')
+    print_log(f"현재 날짜: {today}", 'DEBUG')
+    print_log(f"계산된 월요일: {monday}", 'DEBUG')
+    print_log(f"계산된 일요일: {sunday}", 'DEBUG')
+    print_log(f"주간 범위: {monday.strftime('%m/%d')}~{sunday.strftime('%m/%d')}", 'DEBUG')
     
     return monday, sunday
 
@@ -118,55 +157,24 @@ def write_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def log(message):
-    with open("cron.log", "a", encoding="utf-8") as f:
-        f.write(message + "\n")
-
 def normalize_html_content(html_content):
     unescaped = html.unescape(html_content)
     return re.sub(r'\s+', ' ', unescaped).strip()
 
-# 기본 Jira 매크로 (날짜 포맷 없음)
-JIRA_MACRO_TEMPLATE = '''
-<ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">key,type,summary,assignee,status</ac:parameter>
-  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
-</ac:structured-macro>
-'''
-
-# 날짜 컬럼용 매크로 (updated, created, 예정된 시작)
-JIRA_DATE_MACRO_TEMPLATE = '''
-<ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">created,updated,예정된 시작</ac:parameter>
-  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
-  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
-  <ac:parameter ac:name="sortBy">예정된 시작</ac:parameter>
-  <ac:parameter ac:name="sortOrder">asc</ac:parameter>
-</ac:structured-macro>
-'''
-
-# 모든 컬럼을 포함하되 날짜 포맷이 적용된 매크로
-JIRA_FULL_MACRO_TEMPLATE = '''
-<ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">key,type,status,summary,assignee,created,updated,예정된 시작</ac:parameter>
-  <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
-  <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
-  <ac:parameter ac:name="sortBy">예정된 시작</ac:parameter>
-  <ac:parameter ac:name="sortOrder">asc</ac:parameter>
-</ac:structured-macro>
-'''
-
 # 날짜 포맷이 적용된 전체 매크로 (GitHub 최신 버전)
 JIRA_CUSTOM_DATE_FORMAT_TEMPLATE = '''
 <ac:structured-macro ac:name="jira">
-  <ac:parameter ac:name="columns">key,type,status,summary,assignee,created,updated,예정된 시작</ac:parameter>
   <ac:parameter ac:name="jqlQuery">{jql_query}</ac:parameter>
+  <ac:parameter ac:name="columns">key,type,Request Type,status,summary,assignee,created,updated,예정된 시작</ac:parameter>
   <ac:parameter ac:name="dateFormat">yyyy-MM-dd HH:mm</ac:parameter>
   <ac:parameter ac:name="maximumIssues">1000</ac:parameter>
   <ac:parameter ac:name="showRefreshButton">true</ac:parameter>
   <ac:parameter ac:name="showView">true</ac:parameter>
   <ac:parameter ac:name="sortBy">예정된 시작</ac:parameter>
   <ac:parameter ac:name="sortOrder">asc</ac:parameter>
+  <ac:parameter ac:name="showIcons">true</ac:parameter>
+  <ac:parameter ac:name="showText">true</ac:parameter>
+  <ac:parameter ac:name="columnWidths">80,30,120,80,300,100,120,120,120</ac:parameter>
 </ac:structured-macro>
 '''
 
@@ -193,7 +201,7 @@ def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_dat
         f"project = '{project_key}' "
         f"ORDER BY updated DESC"
     )
-    print(f"JQL: {jql_query}")
+    print_log(f"JQL: {jql_query}", 'DEBUG')
     try:
         # fields를 구체적으로 지정하여 customfield_10817 필드 접근 문제 해결
         fields_param = f"key,summary,status,assignee,created,updated,{date_field_id}"
@@ -213,13 +221,13 @@ def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_dat
                     if start_date_obj <= field_date <= end_date_obj:
                         filtered_issues.append(issue)
                 except Exception as e:
-                    print(f"날짜 파싱 오류 ({issue['key']}): {e}")
+                    print_log(f"날짜 파싱 오류 ({issue['key']}): {e}", 'WARNING')
                     continue
         
-        print(f"✅ 필터링 완료: {len(filtered_issues)}개 이슈 (전체: {len(issues['issues'])}개)")
+        print_log(f"✅ 필터링 완료: {len(filtered_issues)}개 이슈 (전체: {len(issues['issues'])}개)", 'INFO')
         return filtered_issues
     except Exception as e:
-        print(f"Jira 검색 오류: {e}")
+        print_log(f"Jira 검색 오류: {e}", 'ERROR')
         return []
 
 
@@ -252,7 +260,7 @@ def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_ke
 '''
     
     # get_jira_issues_by_customfield_10817 함수를 사용하여 정확한 배포 예정 티켓 조회
-    print(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===")
+    print_log(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===", 'DEBUG')
     deploy_issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     
     # IT 티켓만 필터링하는 HTML 테이블 생성 (정확한 결과 사용)
@@ -282,8 +290,8 @@ def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_ke
 def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
     """정확한 배포 예정 티켓들을 사용하여 HTML 테이블을 생성합니다."""
     try:
-        print(f"=== 정확한 배포 예정 티켓으로 HTML 테이블 생성 ===")
-        print(f"배포 예정 티켓 수: {len(deploy_issues)}")
+        print_log(f"=== 정확한 배포 예정 티켓으로 HTML 테이블 생성 ===", 'DEBUG')
+        print_log(f"배포 예정 티켓 수: {len(deploy_issues)}", 'INFO')
         
         html_content = '''
 <h2 style="margin-top: 20px;">배포 예정 목록</h2>
@@ -329,13 +337,13 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
                 status = issue.get('status', '')
                 custom_field = issue.get('customfield_10817', '')
             
-            print(f"{i}. {issue_key}: {summary}")
-            print(f"   예정된 시작: {custom_field}")
-            print(f"   상태: {status}")
+            print_log(f"{i}. {issue_key}: {summary}", 'DEBUG')
+            print_log(f"   예정된 시작: {custom_field}", 'DEBUG')
+            print_log(f"   상태: {status}", 'DEBUG')
             
             # IT 티켓만 필터링하여 연결된 이슈 조회 (재시도 로직 포함)
             linked_it_tickets = get_linked_it_tickets_with_retry(jira, issue_key)
-            print(f"   연결된 IT 티켓 수: {len(linked_it_tickets)}")
+            print_log(f"   연결된 IT 티켓 수: {len(linked_it_tickets)}", 'DEBUG')
             
             # 연결된 IT 티켓들을 포맷팅
             if linked_it_tickets:
@@ -359,11 +367,11 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
 </table>
 '''
         
-        print(f"=== HTML 테이블 생성 완료 ===")
+        print_log(f"=== HTML 테이블 생성 완료 ===", 'DEBUG')
         return html_content
         
     except Exception as e:
-        print(f"배포 예정 목록 HTML 테이블 생성 실패: {e}")
+        print_log(f"배포 예정 목록 HTML 테이블 생성 실패: {e}", 'ERROR')
         return f'<p>배포 예정 목록 HTML 테이블 생성 중 오류가 발생했습니다: {e}</p>'
 
 def get_status_style(status):
@@ -382,7 +390,7 @@ def get_status_style(status):
 def get_linked_it_tickets(jira, issue_key):
     """특정 이슈의 'is deployed by' 관계로 연결된 IT 티켓들을 가져옵니다."""
     try:
-        print(f"=== '{issue_key}'의 연결된 IT 티켓 조회 시작 ===")
+        print_log(f"=== '{issue_key}'의 연결된 IT 티켓 조회 시작 ===", 'DEBUG')
         
         # Jira API에서 이슈 정보를 가져옵니다 (issuelinks 확장)
         issue_response = jira.issue(issue_key, expand='issuelinks')
@@ -398,11 +406,11 @@ def get_linked_it_tickets(jira, issue_key):
         
         # issuelinks 필드가 있는지 확인
         if 'fields' in issue_data and 'issuelinks' in issue_data['fields']:
-            print(f"발견된 issuelinks 수: {len(issue_data['fields']['issuelinks'])}")
+            print_log(f"발견된 issuelinks 수: {len(issue_data['fields']['issuelinks'])}", 'DEBUG')
             
             for i, link in enumerate(issue_data['fields']['issuelinks']):
                 link_type = link.get('type', {}).get('name', '')
-                print(f"  링크 {i+1}: {link_type}")
+                print_log(f"  링크 {i+1}: {link_type}", 'DEBUG')
                 
                 linked_ticket = None
                 
@@ -412,15 +420,15 @@ def get_linked_it_tickets(jira, issue_key):
                     # IT-5332의 경우: IT-5332가 배포되는 관계이므로 inwardIssue가 배포 티켓
                     if 'inwardIssue' in link:
                         linked_ticket = link['inwardIssue']
-                        print(f"    inwardIssue 발견: {linked_ticket.get('key', 'Unknown')}")
+                        print_log(f"    inwardIssue 발견: {linked_ticket.get('key', 'Unknown')}", 'DEBUG')
                     elif 'outwardIssue' in link:
                         linked_ticket = link['outwardIssue']
-                        print(f"    outwardIssue 발견: {linked_ticket.get('key', 'Unknown')}")
+                        print_log(f"    outwardIssue 발견: {linked_ticket.get('key', 'Unknown')}", 'DEBUG')
                 
                 # 연결된 티켓이 IT 관련 타입인 경우 추가
                 if linked_ticket:
                     issue_type = linked_ticket.get('fields', {}).get('issuetype', {}).get('name', '')
-                    print(f"    티켓 타입: {issue_type}")
+                    print_log(f"    티켓 타입: {issue_type}", 'DEBUG')
                     
                     # IT 관련 이슈 타입들 (더 유연한 필터링)
                     it_issue_types = ['변경', 'Change', 'IT', '개발', 'Development', 'Task', 'Sub-task']
@@ -431,19 +439,19 @@ def get_linked_it_tickets(jira, issue_key):
                             'status': linked_ticket['fields'].get('status', {}).get('name', '')
                         }
                         linked_it_tickets.append(ticket_info)
-                        print(f"    ✅ IT 티켓 추가: {ticket_info['key']} - {ticket_info['summary']}")
+                        print_log(f"    ✅ IT 티켓 추가: {ticket_info['key']} - {ticket_info['summary']}", 'DEBUG')
                     else:
-                        print(f"    ⏭️ IT 타입이 아님: {linked_ticket.get('key', 'Unknown')} ({issue_type})")
+                        print_log(f"    ⏭️ IT 타입이 아님: {linked_ticket.get('key', 'Unknown')} ({issue_type})", 'DEBUG')
                 else:
-                    print(f"    ⏭️ 연결된 티켓 없음")
+                    print_log(f"    ⏭️ 연결된 티켓 없음", 'DEBUG')
         else:
-            print("issuelinks 필드를 찾을 수 없습니다.")
+            print_log("issuelinks 필드를 찾을 수 없습니다.", 'WARNING')
         
-        print(f"=== '{issue_key}' 연결된 IT 티켓 조회 완료: {len(linked_it_tickets)}개 ===")
+        print_log(f"=== '{issue_key}' 연결된 IT 티켓 조회 완료: {len(linked_it_tickets)}개 ===", 'DEBUG')
         return linked_it_tickets
         
     except Exception as e:
-        print(f"'{issue_key}'의 연결된 IT 티켓 조회 실패: {e}")
+        print_log(f"'{issue_key}'의 연결된 IT 티켓 조회 실패: {e}", 'ERROR')
         return []
 
 def get_linked_it_tickets_with_retry(jira, issue_key, max_retries=3):
@@ -454,12 +462,12 @@ def get_linked_it_tickets_with_retry(jira, issue_key, max_retries=3):
             if result is not None:  # 성공적인 결과
                 return result
         except Exception as e:
-            print(f"'{issue_key}' 조회 시도 {attempt + 1}/{max_retries} 실패: {e}")
+            print_log(f"'{issue_key}' 조회 시도 {attempt + 1}/{max_retries} 실패: {e}", 'WARNING')
             if attempt < max_retries - 1:
                 import time
                 time.sleep(1)  # 1초 대기 후 재시도
             else:
-                print(f"'{issue_key}' 최대 재시도 횟수 초과")
+                print_log(f"'{issue_key}' 최대 재시도 횟수 초과", 'ERROR')
                 return []
     return []
 
@@ -847,18 +855,18 @@ def get_changed_issues(prev, curr, jira_url):
 
 def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date, use_pagination=False):
     """customfield_10817 필드 값이 해당 주간에 속하는 모든 티켓을 조회합니다."""
-    print(f"=== customfield_10817 직접 조회 시작 ===")
-    print(f"프로젝트: {project_key}")
-    print(f"대상 기간: {start_date} ~ {end_date}")
-    print(f"페이지네이션 사용: {'예' if use_pagination else '아니오'}")
+    print_log(f"=== customfield_10817 직접 조회 시작 ===", 'DEBUG')
+    print_log(f"프로젝트: {project_key}", 'INFO')
+    print_log(f"대상 기간: {start_date} ~ {end_date}", 'INFO')
+    print_log(f"페이지네이션 사용: {'예' if use_pagination else '아니오'}", 'INFO')
     
     try:
         # 1단계: cf[10817] 형식으로 JQL 쿼리 (Jira 클라우드에서 작동)
         base_jql = f"project = '{project_key}' AND cf[10817] IS NOT EMPTY ORDER BY created DESC"
         fields_param = f"key,summary,status,assignee,created,updated,{JIRA_DEPLOY_DATE_FIELD_ID}"
         
-        print(f"기본 JQL: {base_jql}")
-        print(f"조회 필드: {fields_param}")
+        print_log(f"기본 JQL: {base_jql}", 'DEBUG')
+        print_log(f"조회 필드: {fields_param}", 'DEBUG')
         
         # 페이지네이션 사용 여부에 따른 티켓 조회
         if use_pagination:
@@ -873,24 +881,24 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
                     break
                 all_issues.extend(batch)
                 start_at += len(batch)
-                print(f"배치 조회: {len(batch)}개 (총 {len(all_issues)}개)")
+                print_log(f"배치 조회: {len(batch)}개 (총 {len(all_issues)}개)", 'DEBUG')
                 if len(batch) < max_results:
                     break
             
-            print(f"✅ 전체 티켓 조회 성공 (페이지네이션 사용): {len(all_issues)}개")
+            print_log(f"✅ 전체 티켓 조회 성공 (페이지네이션 사용): {len(all_issues)}개", 'INFO')
         else:
             # 페이지네이션 없이 한 번에 조회 (기본값: 최대 1000개)
             all_issues = jira.search_issues(base_jql, fields=fields_param, maxResults=1000)
-            print(f"✅ 전체 티켓 조회 성공 (페이지네이션 미사용): {len(all_issues)}개")
+            print_log(f"✅ 전체 티켓 조회 성공 (페이지네이션 미사용): {len(all_issues)}개", 'INFO')
         
         # 2단계: customfield_10817 필드 값이 해당 주간에 속하는 티켓 필터링
         filtered_issues = []
         start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
         end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
         
-        print(f"\n=== customfield_10817 필드 값 필터링 ===")
-        print(f"필터링 범위: {start_date_obj} ~ {end_date_obj}")
-        print(f"목표: 해당 주간에 속하는 모든 IT 티켓 포함")
+        print_log(f"\n=== customfield_10817 필드 값 필터링 ===", 'DEBUG')
+        print_log(f"필터링 범위: {start_date_obj} ~ {end_date_obj}", 'DEBUG')
+        print_log(f"목표: 해당 주간에 속하는 모든 IT 티켓 포함", 'DEBUG')
         
         # 제거된 티켓들을 확인하기 위한 디버깅 리스트
         removed_tickets = []
@@ -934,42 +942,42 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
                         # 범위 외 티켓
                         removed_tickets.append(f"⏭️ {issue_key}: {field_date} (범위 외: {start_date_obj} ~ {end_date_obj})")
                 except Exception as e:
-                    print(f"날짜 파싱 오류 ({issue_key}): {e}")
+                    print_log(f"날짜 파싱 오류 ({issue_key}): {e}", 'WARNING')
                     removed_tickets.append(f"⏭️ {issue_key}: 날짜 파싱 오류")
             else:
                 # customfield_10817 값이 없는 티켓 (이 경우는 발생하지 않아야 함)
                 removed_tickets.append(f"⏭️ {issue_key}: customfield_10817 값 없음")
         
-        # 필터링 결과 출력
-        print(f"\n=== 필터링 결과 ===")
-        print(f"전체 티켓: {len(all_issues)}개")
-        print(f"customfield_10817 값이 있는 티켓: {len([i for i in all_issues if getattr(i.fields, JIRA_DEPLOY_DATE_FIELD_ID, None)])}개")
-        print(f"해당 주간에 속하는 티켓: {len(filtered_issues)}개")
-        print(f"제거된 티켓: {len(removed_tickets)}개")
+        # 필터링 결과 출력 (간략화)
+        print_log(f"\n=== 필터링 결과 ===", 'INFO')
+        print_log(f"전체 티켓: {len(all_issues)}개", 'INFO')
+        print_log(f"customfield_10817 값이 있는 티켓: {len([i for i in all_issues if getattr(i.fields, JIRA_DEPLOY_DATE_FIELD_ID, None)])}개", 'INFO')
+        print_log(f"해당 주간에 속하는 티켓: {len(filtered_issues)}개", 'INFO')
+        print_log(f"제거된 티켓: {len(removed_tickets)}개", 'INFO')
         
-        # 포함된 티켓 상세 정보 출력
-        print(f"\n=== 포함된 티켓 상세 정보 ===")
+        # 포함된 티켓 상세 정보 출력 (DEBUG 레벨로 변경)
+        print_log(f"\n=== 포함된 티켓 상세 정보 ===", 'DEBUG')
         for ticket_info in included_tickets:
-            print(f"  {ticket_info}")
+            print_log(f"  {ticket_info}", 'DEBUG')
         
-        # 제거된 티켓 상세 정보 출력 (최대 10개만)
+        # 제거된 티켓 상세 정보 출력 (DEBUG 레벨로 변경, 최대 10개만)
         if removed_tickets:
-            print(f"\n=== 제거된 티켓 상세 정보 ===")
+            print_log(f"\n=== 제거된 티켓 상세 정보 ===", 'DEBUG')
             for i, ticket_info in enumerate(removed_tickets[:10]):
-                print(f"  {ticket_info}")
+                print_log(f"  {ticket_info}", 'DEBUG')
             if len(removed_tickets) > 10:
-                print(f"  ... 외 {len(removed_tickets) - 10}개")
+                print_log(f"  ... 외 {len(removed_tickets) - 10}개", 'DEBUG')
         
-        print(f"\n=== 최종 결과 ===")
+        print_log(f"\n=== 최종 결과 ===", 'DEBUG')
         for i, issue in enumerate(filtered_issues, 1):
-            print(f"{i}. {issue['key']}: {issue['summary']}")
-            print(f"   예정된 시작: {issue['fields'][JIRA_DEPLOY_DATE_FIELD_ID]}")
-            print(f"   상태: {issue['status']}")
+            print_log(f"{i}. {issue['key']}: {issue['summary']}", 'DEBUG')
+            print_log(f"   예정된 시작: {issue['fields'][JIRA_DEPLOY_DATE_FIELD_ID]}", 'DEBUG')
+            print_log(f"   상태: {issue['status']}", 'DEBUG')
         
         return filtered_issues
         
     except Exception as e:
-        print(f"Jira 이슈 조회 실패: {e}")
+        print_log(f"Jira 이슈 조회 실패: {e}", 'ERROR')
         return []
 
 def main():
@@ -995,15 +1003,15 @@ def main():
     
     # 배포 메시지 알림 설정 상태 출력
     deploy_status = "🟢 활성화" if deploy_message_enabled else "🔴 비활성화"
-    print(f"📢 배포 메시지 알림: {deploy_status} (DEPLOY_MESSAGE={os.getenv('DEPLOY_MESSAGE', 'off')})")
+    print_log(f"📢 배포 메시지 알림: {deploy_status} (DEPLOY_MESSAGE={os.getenv('DEPLOY_MESSAGE', 'off')})", 'INFO')
     
     # 2. API 클라이언트 생성
     try:
         jira = JIRA(server=atlassian_url, basic_auth=(atlassian_username, atlassian_token))
         confluence = Confluence(url=atlassian_url, username=atlassian_username, password=atlassian_token, cloud=True)
-        print(f"\nJira/Confluence 서버 연결 성공!: {get_now_str()}")
+        print_log(f"\nJira/Confluence 서버 연결 성공!: {get_now_str()}", 'INFO')
     except Exception as e:
-        print(f"Jira/Confluence 연결 오류: {e}")
+        print_log(f"Jira/Confluence 연결 오류: {e}", 'ERROR')
         return
     
     # 3. 명령행 인수 처리
@@ -1034,32 +1042,32 @@ def main():
     # --pagination 옵션 확인
     if "--pagination" in sys.argv:
         use_pagination = True
-        print("페이지네이션 옵션이 활성화되었습니다.")
+        print_log("페이지네이션 옵션이 활성화되었습니다.", 'INFO')
     elif "--no-pagination" in sys.argv:
         use_pagination = False
-        print("페이지네이션 옵션이 비활성화되었습니다. (기본값)")
+        print_log("페이지네이션 옵션이 비활성화되었습니다. (기본값)", 'INFO')
     
     # --test 옵션 확인 (Slack 알림 비활성화)
     if "--test" in sys.argv:
         test_mode = True
-        print("🧪 테스트 모드가 활성화되었습니다. Slack 알림이 전송되지 않습니다.")
+        print_log("🧪 테스트 모드가 활성화되었습니다. Slack 알림이 전송되지 않습니다.", 'INFO')
     
     # 4. 날짜 범위 계산
     monday, sunday = get_week_range(mode)
     start_date_str, end_date_str = monday.strftime('%Y-%m-%d'), sunday.strftime('%Y-%m-%d')
     page_title = get_page_title(monday, sunday)
     
-    # 디버깅: 날짜 범위 상세 정보 출력
-    print(f"\n=== 날짜 범위 계산 디버깅 ===")
-    print(f"현재 날짜: {date.today()}")
-    print(f"요일: {date.today().weekday()} (0=월요일, 6=일요일)")
-    print(f"계산된 월요일: {monday}")
-    print(f"계산된 일요일: {sunday}")
-    print(f"시작일: {start_date_str}")
-    print(f"종료일: {end_date_str}")
-    print(f"페이지 제목: {page_title}")
-    print(f"사용자 의도 확인: 7월 4째주 (07/21~07/27)와 일치하는가?")
-    print()
+    # 디버깅: 날짜 범위 상세 정보 출력 (DEBUG 레벨로 변경)
+    print_log(f"\n=== 날짜 범위 계산 디버깅 ===", 'DEBUG')
+    print_log(f"현재 날짜: {date.today()}", 'DEBUG')
+    print_log(f"요일: {date.today().weekday()} (0=월요일, 6=일요일)", 'DEBUG')
+    print_log(f"계산된 월요일: {monday}", 'DEBUG')
+    print_log(f"계산된 일요일: {sunday}", 'DEBUG')
+    print_log(f"시작일: {start_date_str}", 'DEBUG')
+    print_log(f"종료일: {end_date_str}", 'DEBUG')
+    print_log(f"페이지 제목: {page_title}", 'DEBUG')
+    print_log(f"사용자 의도 확인: 7월 4째주 (07/21~07/27)와 일치하는가?", 'DEBUG')
+    print_log("", 'DEBUG')
     
     # 모드별 설명 메시지
     mode_descriptions = {
@@ -1069,9 +1077,9 @@ def main():
         "update": "이번 주 배포 예정 티켓으로 리포트 업데이트 (기본값)"
     }
     mode_desc = mode_descriptions.get(mode, "이번 주")
-    print(f"실행 모드: {mode} ({mode_desc})")
-    print(f"대상 기간: {start_date_str} ~ {end_date_str}")
-    print(f"페이지 제목: {page_title}")
+    print_log(f"실행 모드: {mode} ({mode_desc})", 'INFO')
+    print_log(f"대상 기간: {start_date_str} ~ {end_date_str}", 'INFO')
+    print_log(f"페이지 제목: {page_title}", 'INFO')
 
     # 5. Jira 이슈 조회 (customfield_10817 직접 조회 사용)
     jql_query = (
@@ -1081,14 +1089,14 @@ def main():
     )
     issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
     if not issues:
-        print(f"{mode_desc}에 배포 예정 티켓 없음. 빈 테이블로 생성/업데이트.")
+        print_log(f"{mode_desc}에 배포 예정 티켓 없음. 빈 테이블로 생성/업데이트.", 'INFO')
 
     # 6. 변경 감지
     SNAPSHOT_FILE_PATH = get_snapshot_file_path(mode)
-    print(f"\n=== 스냅샷 파일 정보 ===")
-    print(f"모드: {mode}")
-    print(f"스냅샷 파일: {SNAPSHOT_FILE_PATH}")
-    print(f"대상 기간: {start_date_str} ~ {end_date_str}")
+    print_log(f"\n=== 스냅샷 파일 정보 ===", 'DEBUG')
+    print_log(f"모드: {mode}", 'DEBUG')
+    print_log(f"스냅샷 파일: {SNAPSHOT_FILE_PATH}", 'DEBUG')
+    print_log(f"대상 기간: {start_date_str} ~ {end_date_str}", 'DEBUG')
     
     prev_snapshot = read_json(SNAPSHOT_FILE_PATH)
     curr_snapshot = snapshot_issues(issues, JIRA_DEPLOY_DATE_FIELD_ID)
@@ -1099,7 +1107,7 @@ def main():
     else:
         # update 모드에서만 이슈 변경 감지 (강제 업데이트 제외)
         if not force_update and not issues_changed(prev_snapshot, curr_snapshot):
-            print(f"JIRA 이슈 변경 없음. 업데이트/알림 생략. {get_now_str()}")
+            print_log(f"JIRA 이슈 변경 없음. 업데이트/알림 생략. {get_now_str()}", 'INFO')
             log(f"\n실행시간: {get_now_str()}\n업데이트 할 사항 없음.")
             return
         changed_issues = get_changed_issues(prev_snapshot, curr_snapshot, atlassian_url)
