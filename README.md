@@ -10,11 +10,14 @@
 
 - **Jira 연동**: 배포 예정 티켓 자동 수집 (페이지네이션 지원)
 - **Confluence 연동**: 주간 배포 리포트 페이지 자동 생성/업데이트
+- **JIRA 매크로 테이블**: 요청 유형 필드 포함한 상세 정보 표시
 - **배포 예정 목록**: 부모 IT 티켓과 연결된 배포 티켓 관계 표시
 - **Slack 알림**: 변경사항 발생 시 자동 알림 (중복 방지)
 - **스냅샷 관리**: 이전 상태와 비교하여 변경사항 감지
 - **다양한 실행 모드**: 생성, 업데이트, 현재/다음/지난 주 지원
 - **연결된 IT 티켓 조회**: "is deployed by" 관계로 연결된 배포 티켓 자동 조회
+- **고급 로그 시스템**: 로그 레벨 제어 및 일일 로그 파일 관리
+- **환경 변수 제어**: 로그 레벨 및 상세 로그 설정
 
 ## 📁 프로젝트 구조
 
@@ -22,6 +25,7 @@
 weekly-deploy-reporter/
 ├── create_weekly_report.py      # 메인 스크립트
 ├── getJiraDeployedBy.js        # Jira 배포자 정보 추출
+├── check_jira_fields.py        # JIRA 필드 정보 조회 스크립트
 ├── deploy_ticket_links.json    # 배포 티켓 링크 데이터
 ├── deploy_ticket_links.csv     # 배포 티켓 링크 CSV
 ├── weekly_issues.json          # 이슈 현황 데이터
@@ -90,6 +94,10 @@ CONFLUENCE_SPACE_KEY=DEV
 
 # 배포 메시지 알림 설정 (선택사항)
 DEPLOY_MESSAGE=off  # on: 배포 승인 요청 메시지 활성화, off: 비활성화 (기본값)
+
+# 로그 설정 (선택사항)
+LOG_LEVEL=INFO        # DEBUG, INFO, WARNING, ERROR, CRITICAL (기본값: INFO)
+VERBOSE_LOGGING=false # true/false (기본값: false)
 ```
 
 ### 4. Jira API 토큰 생성
@@ -126,6 +134,13 @@ python create_weekly_report.py --check-page
 
 # 특정 티켓의 연결 관계 디버깅
 python create_weekly_report.py --debug-links IT-5332
+
+# 로그 레벨 설정
+LOG_LEVEL=DEBUG python create_weekly_report.py current
+VERBOSE_LOGGING=true python create_weekly_report.py current
+
+# 테스트 모드 (Slack 알림 비활성화)
+python create_weekly_report.py current --test
 ```
 
 ### 실행 모드 설명
@@ -144,6 +159,13 @@ python create_weekly_report.py --debug-links IT-5332
 | `--no-pagination` | 페이지네이션 없이 한 번에 조회 (최대 1000개) | ✅ | 빠른 실행, 소량 데이터 |
 | `--pagination` | 페이지네이션을 사용하여 모든 티켓 조회 (100개씩 배치) | ❌ | 대용량 데이터, 안정성 중시 |
 
+### 로그 레벨 옵션
+
+| 환경 변수 | 설명 | 기본값 | 사용 예시 |
+|-----------|------|--------|-----------|
+| `LOG_LEVEL` | 로그 레벨 설정 | INFO | `LOG_LEVEL=DEBUG python create_weekly_report.py` |
+| `VERBOSE_LOGGING` | 상세 로그 활성화 | false | `VERBOSE_LOGGING=true python create_weekly_report.py` |
+
 ## 🔧 설정 및 커스터마이징
 
 ### Jira 필드 설정
@@ -152,6 +174,19 @@ python create_weekly_report.py --debug-links IT-5332
 # create_weekly_report.py 파일에서 수정
 JIRA_DEPLOY_DATE_FIELD_ID = "customfield_10817"  # 예정된 시작 필드 ID
 ```
+
+### JIRA 매크로 설정
+
+현재 JIRA 매크로는 다음 컬럼들을 포함합니다:
+- **키**: 티켓 키 (예: IT-5331)
+- **유형**: 이슈 타입 (아이콘 + 텍스트)
+- **Request Type**: 요청 유형 (예: "기능 변경 요청", "설정 변경 요청")
+- **상태**: 현재 상태
+- **요약**: 티켓 제목
+- **담당자**: 담당자 정보
+- **생성일**: 티켓 생성 날짜
+- **변경일**: 마지막 수정 날짜
+- **예정된 시작**: 배포 예정 날짜
 
 ### Confluence 페이지 설정
 
@@ -197,8 +232,9 @@ python create_weekly_report.py
 
 ### 1. Jira 매크로 테이블
 - 배포 예정 티켓 목록
-- 키, 타입, 요약, 담당자, 상태, 생성일, 수정일, 예정된 시작 정보
+- 키, 유형, 요청 유형, 상태, 요약, 담당자, 생성일, 수정일, 예정된 시작 정보
 - 날짜 포맷: `yyyy-MM-dd HH:mm`
+- 요청 유형 필드: "기능 변경 요청", "설정 변경 요청" 등 표시
 
 ### 2. 배포 예정 목록 HTML 테이블
 - **부모 IT 티켓**: 배포 대상이 되는 IT 티켓
@@ -243,6 +279,9 @@ tail -f cron.log
 
 # 테스트 로그 확인
 tail -f cron_test.log
+
+# 일일 로그 확인
+tail -f logs/runtime/cron_$(date +%y%m%d).log
 ```
 
 ## 🧪 테스트
@@ -256,6 +295,9 @@ python -m pytest tests/test_create_weekly_report.py -v
 
 # 디버깅 모드로 실행
 python create_weekly_report.py --debug-links IT-5332
+
+# JIRA 필드 정보 확인
+python check_jira_fields.py
 ```
 
 ## 📝 주요 함수 설명
@@ -270,6 +312,12 @@ python create_weekly_report.py --debug-links IT-5332
 - `notify_new_deploy_tickets()`: 새로운 배포 티켓 Slack 알림
 - `snapshot_issues()`: 이슈 스냅샷 생성
 - `get_changed_issues()`: 변경사항 감지
+
+### 로그 관련 함수들
+
+- `should_log()`: 로그 레벨에 따라 출력 여부 결정
+- `log()`: 로그 메시지를 파일에 기록
+- `print_log()`: 로그 메시지를 콘솔에 출력하고 파일에도 기록
 
 ### 유틸리티 함수들
 
@@ -302,6 +350,11 @@ python create_weekly_report.py --debug-links IT-5332
    - 날짜 범위 확인
    - 페이지네이션 로그 확인
 
+5. **JIRA 매크로에서 요청 유형이 표시되지 않는 경우**
+   - `customfield_10403` 필드 확인
+   - JIRA Service Desk 설정 확인
+   - 매크로 파라미터 확인
+
 ### 디버깅
 
 ```bash
@@ -313,13 +366,36 @@ python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('ATLA
 
 # 특정 티켓의 연결 관계 확인
 python create_weekly_report.py --debug-links IT-5332
+
+# JIRA 필드 정보 확인
+python check_jira_fields.py
+
+# 로그 레벨 설정으로 디버깅
+LOG_LEVEL=DEBUG python create_weekly_report.py current
 ```
 
 ## 📈 모니터링
 
 ### 로그 관리 시스템
 
-이 프로젝트는 일일 로그 파일 관리 시스템을 제공합니다:
+이 프로젝트는 고급 로그 파일 관리 시스템을 제공합니다:
+
+#### 로그 레벨 시스템
+- **DEBUG**: 상세한 디버깅 정보
+- **INFO**: 일반적인 실행 정보 (기본값)
+- **WARNING**: 경고 메시지
+- **ERROR**: 오류 메시지
+- **CRITICAL**: 심각한 오류 메시지
+
+#### 환경 변수 제어
+```bash
+# 로그 레벨 설정
+LOG_LEVEL=DEBUG python create_weekly_report.py current
+LOG_LEVEL=WARNING python create_weekly_report.py current
+
+# 상세 로그 활성화
+VERBOSE_LOGGING=true python create_weekly_report.py current
+```
 
 #### 일일 로그 파일
 - **파일명 형식**: `cron_YYMMDD.log` (예: `cron_250724.log`)
@@ -380,6 +456,7 @@ crontab crontab_new_setting.txt
 - **중복 알림 방지**: 변경사항 해시 기반 중복 방지
 - **시간 제한**: Slack 알림은 8시~21시에만 전송
 - **빠른 실행**: 기본적으로 페이지네이션 없이 빠른 실행
+- **로그 레벨 제어**: 환경 변수로 로그 출력 제어
 
 ## 📞 지원
 
@@ -392,5 +469,5 @@ crontab crontab_new_setting.txt
 
 ---
 
-**마지막 업데이트**: 2025년 7월
-**최신 버전**: 선택적 페이지네이션 옵션 추가, 배포 예정 목록 HTML 테이블, 연결된 IT 티켓 조회 기능
+**마지막 업데이트**: 2025년 8월
+**최신 버전**: JIRA 매크로 요청 유형 필드 추가, 고급 로그 시스템, 환경 변수 제어 기능
