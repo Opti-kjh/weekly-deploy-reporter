@@ -1,6 +1,6 @@
 # Task Master AI - Claude Code Integration Guide
 
-## Essential Commands
+## 🚀 Essential Commands
 
 ### Core Workflow Commands
 
@@ -35,7 +35,7 @@ task-master validate-dependencies                            # Check for depende
 task-master generate                                         # Update task markdown files (usually auto-called)
 ```
 
-## Key Files & Project Structure
+## 📁 Key Files & Project Structure
 
 ### Core Files
 
@@ -55,7 +55,7 @@ task-master generate                                         # Update task markd
 ### Directory Structure
 
 ```
-project/
+weekly-deploy-reporter/
 ├── .taskmaster/
 │   ├── tasks/              # Task files directory
 │   │   ├── tasks.json      # Main task database
@@ -73,10 +73,17 @@ project/
 │   └── commands/         # Custom slash commands
 ├── .env                  # API keys
 ├── .mcp.json            # MCP configuration
+├── create_weekly_report.py  # Main script (optimized)
+├── log_manager.py        # Log management utility
+├── create_daily_log.py   # Daily log creation script
+├── DAILY_LOG_SETUP.md    # Daily log system guide
+├── create_weekly_report_process_diagram.md  # Process diagrams
+├── code_cleanup_summary.md  # Code optimization report
+├── unused_functions_analysis.md  # Unused functions analysis
 └── CLAUDE.md            # This file - auto-loaded by Claude Code
 ```
 
-## MCP Integration
+## 🔧 MCP Integration
 
 Task Master provides an MCP server that Claude Code can connect to. Configure in `.mcp.json`:
 
@@ -102,316 +109,345 @@ Task Master provides an MCP server that Claude Code can connect to. Configure in
 }
 ```
 
-### Essential MCP Tools
+## 🎯 Weekly Deploy Reporter Integration
 
-```javascript
-help; // = shows available taskmaster commands
-// Project setup
-initialize_project; // = task-master init
-parse_prd; // = task-master parse-prd
+### Project Overview
 
-// Daily workflow
-get_tasks; // = task-master list
-next_task; // = task-master next
-get_task; // = task-master show <id>
-set_task_status; // = task-master set-status
+This project integrates TaskMaster AI with the Weekly Deploy Reporter system, providing AI-powered task management for automated deployment reporting.
 
-// Task management
-add_task; // = task-master add-task
-expand_task; // = task-master expand
-update_task; // = task-master update-task
-update_subtask; // = task-master update-subtask
-update; // = task-master update
+### Key Integration Points
 
-// Analysis
-analyze_project_complexity; // = task-master analyze-complexity
-complexity_report; // = task-master complexity-report
+#### 1. Automated Task Generation
+```bash
+# Generate tasks from PRD document
+task-master parse-prd .taskmaster/docs/weekly-reporter-prd.txt
+
+# View generated tasks
+task-master list
 ```
 
-## Claude Code Workflow Integration
-
-### Standard Development Workflow
-
-#### 1. Project Initialization
-
+#### 2. Development Workflow
 ```bash
-# Initialize Task Master
-task-master init
+# Get next task to work on
+task-master next
 
-# Create or obtain PRD, then parse it
-task-master parse-prd .taskmaster/docs/prd.txt
+# Mark task as complete
+task-master set-status --id=1.2 --status=done
 
-# Analyze complexity and expand tasks
+# Expand complex tasks
+task-master expand --id=2.1 --research
+```
+
+#### 3. Task Analysis
+```bash
+# Analyze task complexity
 task-master analyze-complexity --research
-task-master expand --all --research
+
+# View complexity report
+task-master complexity-report
 ```
 
-If tasks already exist, another PRD can be parsed (with new information only!) using parse-prd with --append flag. This will add the generated tasks to the existing list of tasks..
+### Current Task Status
 
-#### 2. Daily Development Loop
+Based on the project analysis, the following tasks are currently managed:
+
+#### Completed Tasks ✅
+- **Task 1**: 프로젝트 저장소 및 환경 초기화
+- **Task 2**: API 인증 및 연동 구현
+- **Task 3**: Jira 이슈 조회 및 필터링 모듈
+- **Task 4**: Confluence 페이지 생성/업데이트 모듈
+- **Task 5**: Slack 알림 시스템 구현
+- **Task 6**: 스냅샷 관리 및 변경 감지
+- **Task 7**: 코드 최적화 및 정리
+
+#### Active Tasks 🔄
+- **Task 8**: 로그 시스템 고도화
+- **Task 9**: TaskMaster AI 통합 완료
+- **Task 10**: 문서화 및 가이드 업데이트
+
+#### Planned Tasks 📋
+- **Task 11**: 성능 모니터링 대시보드
+- **Task 12**: 자동화 스크립트 개선
+- **Task 13**: 테스트 커버리지 확대
+
+## 🔍 Task Management Workflow
+
+### 1. Daily Development Process
 
 ```bash
-# Start each session
-task-master next                           # Find next available task
-task-master show <id>                     # Review task details
+# Start your day
+task-master next                    # Get next task to work on
+task-master show <id>              # Review task details
 
-# During implementation, check in code context into the tasks and subtasks
-task-master update-subtask --id=<id> --prompt="implementation notes..."
+# Work on task
+# ... development work ...
 
-# Complete tasks
+# Complete task
 task-master set-status --id=<id> --status=done
+
+# Move to next task
+task-master next
 ```
 
-#### 3. Multi-Claude Workflows
-
-For complex projects, use multiple Claude Code sessions:
+### 2. Task Expansion Process
 
 ```bash
-# Terminal 1: Main implementation
-cd project && claude
+# For complex tasks, expand into subtasks
+task-master expand --id=<id> --research --force
 
-# Terminal 2: Testing and validation
-cd project-test-worktree && claude
+# Review expanded subtasks
+task-master show <id>
 
-# Terminal 3: Documentation updates
-cd project-docs-worktree && claude
+# Work on subtasks
+task-master update-subtask --id=<id> --prompt="implementation notes"
 ```
 
-### Custom Slash Commands
+### 3. Dependency Management
 
-Create `.claude/commands/taskmaster-next.md`:
+```bash
+# Add dependencies between tasks
+task-master add-dependency --id=3.1 --depends-on=2.3
 
-```markdown
-Find the next available Task Master task and show its details.
+# Validate dependencies
+task-master validate-dependencies
 
-Steps:
-
-1. Run `task-master next` to get the next task
-2. If a task is available, run `task-master show <id>` for full details
-3. Provide a summary of what needs to be implemented
-4. Suggest the first implementation step
+# Reorganize task hierarchy
+task-master move --from=3.2 --to=2.4
 ```
 
-Create `.claude/commands/taskmaster-complete.md`:
+## 📊 Project Metrics
 
-```markdown
-Complete a Task Master task: $ARGUMENTS
+### Code Optimization Results
+- **44% code reduction**: ~1,600 lines → ~900 lines
+- **39% function reduction**: 38 functions → 23 functions
+- **100% unused function removal**: 15 functions completely removed
+- **100% duplicate function removal**: 1 duplicate function removed
 
-Steps:
+### Task Completion Status
+- **Completed**: 7 tasks (70%)
+- **In Progress**: 3 tasks (30%)
+- **Planned**: 3 tasks (pending)
 
-1. Review the current task with `task-master show $ARGUMENTS`
-2. Verify all implementation is complete
-3. Run any tests related to this task
-4. Mark as complete: `task-master set-status --id=$ARGUMENTS --status=done`
-5. Show the next available task with `task-master next`
+### Performance Improvements
+- **Execution time**: 1-2 minutes (without pagination)
+- **Memory usage**: 50-200MB (depending on pagination)
+- **API calls**: 1-5 Jira calls, 1-2 Confluence calls (default)
+
+## 🛠️ Development Guidelines
+
+### Code Quality Standards
+- **Readability first**: Prioritize code readability over performance
+- **Single responsibility**: Each function should have a single purpose
+- **Descriptive naming**: Use clear, meaningful variable and function names
+- **Documentation**: Add comprehensive comments for complex logic
+- **Error handling**: Implement proper exception handling
+
+### Testing Strategy
+```bash
+# Run all tests
+python -m pytest tests/
+
+# Run specific test
+python -m pytest tests/test_create_weekly_report.py -v
+
+# Debug specific functionality
+python create_weekly_report.py --debug-links IT-5332
 ```
 
-## Tool Allowlist Recommendations
+### Logging Best Practices
+```bash
+# Debug level for development
+LOG_LEVEL=DEBUG python create_weekly_report.py current
 
-Add to `.claude/settings.json`:
+# Info level for production
+LOG_LEVEL=INFO python create_weekly_report.py current
 
+# Verbose logging for detailed debugging
+VERBOSE_LOGGING=true python create_weekly_report.py current
+```
+
+## 🔧 Configuration Management
+
+### Environment Variables
+```bash
+# Required variables
+ATLASSIAN_URL=https://your-domain.atlassian.net
+ATLASSIAN_USERNAME=your-email@domain.com
+ATLASSIAN_API_TOKEN=your-api-token
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+
+# Optional variables
+LOG_LEVEL=INFO                    # DEBUG, INFO, WARNING, ERROR, CRITICAL
+VERBOSE_LOGGING=false            # true/false
+DEPLOY_MESSAGE=off               # on/off
+JIRA_PROJECT_KEY=IT
+CONFLUENCE_SPACE_KEY=DEV
+```
+
+### TaskMaster Configuration
 ```json
 {
-  "allowedTools": [
-    "Edit",
-    "Bash(task-master *)",
-    "Bash(git commit:*)",
-    "Bash(git add:*)",
-    "Bash(npm run *)",
-    "mcp__task_master_ai__*"
-  ]
+  "models": {
+    "main": {
+      "provider": "anthropic",
+      "modelId": "claude-3-7-sonnet-20250219",
+      "maxTokens": 120000,
+      "temperature": 0.2
+    },
+    "research": {
+      "provider": "perplexity",
+      "modelId": "sonar-pro",
+      "maxTokens": 8700,
+      "temperature": 0.1
+    }
+  },
+  "global": {
+    "logLevel": "info",
+    "debug": false,
+    "defaultNumTasks": 10,
+    "defaultSubtasks": 5,
+    "defaultPriority": "medium",
+    "projectName": "weekly-reporter",
+    "defaultLanguage": "ko"
+  }
 }
 ```
 
-## Configuration & Setup
+## 📈 Monitoring & Analytics
 
-### API Keys Required
-
-At least **one** of these API keys must be configured:
-
-- `ANTHROPIC_API_KEY` (Claude models) - **Recommended**
-- `PERPLEXITY_API_KEY` (Research features) - **Highly recommended**
-- `OPENAI_API_KEY` (GPT models)
-- `GOOGLE_API_KEY` (Gemini models)
-- `MISTRAL_API_KEY` (Mistral models)
-- `OPENROUTER_API_KEY` (Multiple models)
-- `XAI_API_KEY` (Grok models)
-
-An API key is required for any provider used across any of the 3 roles defined in the `models` command.
-
-### Model Configuration
-
+### Log Management
 ```bash
-# Interactive setup (recommended)
-task-master models --setup
+# View log summary
+python3 log_manager.py summary
 
-# Set specific models
-task-master models --set-main claude-3-5-sonnet-20241022
-task-master models --set-research perplexity-llama-3.1-sonar-large-128k-online
-task-master models --set-fallback gpt-4o-mini
+# Monitor real-time logs
+python3 log_manager.py tail
+
+# Check today's logs
+python3 log_manager.py today
+
+# Clean up old logs
+python3 log_manager.py cleanup --keep-days 30
 ```
 
-## Task Structure & IDs
+### Performance Monitoring
+- **Execution time tracking**: Automatic timing in logs
+- **Error rate monitoring**: Failed execution detection
+- **API call tracking**: Request/response logging
+- **Resource usage**: Memory and CPU monitoring
 
-### Task ID Format
+## 🚀 Deployment & Automation
 
-- Main tasks: `1`, `2`, `3`, etc.
-- Subtasks: `1.1`, `1.2`, `2.1`, etc.
-- Sub-subtasks: `1.1.1`, `1.1.2`, etc.
-
-### Task Status Values
-
-- `pending` - Ready to work on
-- `in-progress` - Currently being worked on
-- `done` - Completed and verified
-- `deferred` - Postponed
-- `cancelled` - No longer needed
-- `blocked` - Waiting on external factors
-
-### Task Fields
-
-```json
-{
-  "id": "1.2",
-  "title": "Implement user authentication",
-  "description": "Set up JWT-based auth system",
-  "status": "pending",
-  "priority": "high",
-  "dependencies": ["1.1"],
-  "details": "Use bcrypt for hashing, JWT for tokens...",
-  "testStrategy": "Unit tests for auth functions, integration tests for login flow",
-  "subtasks": []
-}
-```
-
-## Claude Code Best Practices with Task Master
-
-### Context Management
-
-- Use `/clear` between different tasks to maintain focus
-- This CLAUDE.md file is automatically loaded for context
-- Use `task-master show <id>` to pull specific task context when needed
-
-### Iterative Implementation
-
-1. `task-master show <subtask-id>` - Understand requirements
-2. Explore codebase and plan implementation
-3. `task-master update-subtask --id=<id> --prompt="detailed plan"` - Log plan
-4. `task-master set-status --id=<id> --status=in-progress` - Start work
-5. Implement code following logged plan
-6. `task-master update-subtask --id=<id> --prompt="what worked/didn't work"` - Log progress
-7. `task-master set-status --id=<id> --status=done` - Complete task
-
-### Complex Workflows with Checklists
-
-For large migrations or multi-step processes:
-
-1. Create a markdown PRD file describing the new changes: `touch task-migration-checklist.md` (prds can be .txt or .md)
-2. Use Taskmaster to parse the new prd with `task-master parse-prd --append` (also available in MCP)
-3. Use Taskmaster to expand the newly generated tasks into subtasks. Consdier using `analyze-complexity` with the correct --to and --from IDs (the new ids) to identify the ideal subtask amounts for each task. Then expand them.
-4. Work through items systematically, checking them off as completed
-5. Use `task-master update-subtask` to log progress on each task/subtask and/or updating/researching them before/during implementation if getting stuck
-
-### Git Integration
-
-Task Master works well with `gh` CLI:
-
+### Crontab Configuration
 ```bash
-# Create PR for completed task
-gh pr create --title "Complete task 1.2: User authentication" --body "Implements JWT auth system as specified in task 1.2"
+# Weekly report generation (Fridays at 9:30 AM)
+30 9 * * 5 /path/to/venv/bin/python /path/to/create_weekly_report.py create
 
-# Reference task in commits
-git commit -m "feat: implement JWT auth (task 1.2)"
+# Daily updates (Mon-Fri, 8 AM-9 PM, every 15 minutes)
+15,30,45,0 8-21 * * 1-5 /path/to/venv/bin/python /path/to/create_weekly_report.py update
+
+# Log management (Sundays at 2 AM)
+0 2 * * 0 /path/to/venv/bin/python /path/to/log_manager.py cleanup --keep-days 30
 ```
 
-### Parallel Development with Git Worktrees
-
+### Automated Testing
 ```bash
-# Create worktrees for parallel task development
-git worktree add ../project-auth feature/auth-system
-git worktree add ../project-api feature/api-refactor
+# Run all tests
+python -m pytest tests/ -v
 
-# Run Claude Code in each worktree
-cd ../project-auth && claude    # Terminal 1: Auth work
-cd ../project-api && claude     # Terminal 2: API work
+# Test specific functionality
+python test_pagination_options.py
+python test_emoji_notification.py
+python test_it_5332_links.py
 ```
 
-## Troubleshooting
+## 🔍 Troubleshooting Guide
 
-### AI Commands Failing
+### Common Issues
 
+#### 1. TaskMaster Connection Issues
 ```bash
-# Check API keys are configured
-cat .env                           # For CLI usage
+# Check TaskMaster configuration
+cat .taskmaster/config.json
 
-# Verify model configuration
-task-master models
+# Test TaskMaster connection
+task-master list
 
-# Test with different model
-task-master models --set-fallback gpt-4o-mini
+# Reinitialize if needed
+task-master init
 ```
 
-### MCP Connection Issues
-
-- Check `.mcp.json` configuration
-- Verify Node.js installation
-- Use `--mcp-debug` flag when starting Claude Code
-- Use CLI as fallback if MCP unavailable
-
-### Task File Sync Issues
-
+#### 2. Log System Problems
 ```bash
-# Regenerate task files from tasks.json
-task-master generate
+# Check log directory permissions
+ls -la logs/runtime/
 
-# Fix dependency issues
-task-master fix-dependencies
+# Test log creation
+python3 create_daily_log.py
+
+# Verify log manager
+python3 log_manager.py summary
 ```
 
-DO NOT RE-INITIALIZE. That will not do anything beyond re-adding the same Taskmaster core files.
+#### 3. API Connection Issues
+```bash
+# Test environment variables
+python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('ATLASSIAN_URL:', os.getenv('ATLASSIAN_URL'))"
 
-## Important Notes
+# Test Jira connection
+python check_jira_fields.py
 
-### AI-Powered Operations
+# Debug specific ticket
+python create_weekly_report.py --debug-links IT-5332
+```
 
-These commands make AI calls and may take up to a minute:
+### Debug Commands
+```bash
+# Enable debug logging
+LOG_LEVEL=DEBUG python create_weekly_report.py current
 
-- `parse_prd` / `task-master parse-prd`
-- `analyze_project_complexity` / `task-master analyze-complexity`
-- `expand_task` / `task-master expand`
-- `expand_all` / `task-master expand --all`
-- `add_task` / `task-master add-task`
-- `update` / `task-master update`
-- `update_task` / `task-master update-task`
-- `update_subtask` / `task-master update-subtask`
+# Verbose output
+VERBOSE_LOGGING=true python create_weekly_report.py current
 
-### File Management
+# Force update (ignore change detection)
+python create_weekly_report.py --force-update
 
-- Never manually edit `tasks.json` - use commands instead
-- Never manually edit `.taskmaster/config.json` - use `task-master models`
-- Task markdown files in `tasks/` are auto-generated
-- Run `task-master generate` after manual changes to tasks.json
+# Check page content
+python create_weekly_report.py --check-page
+```
 
-### Claude Code Session Management
+## 📚 Related Documentation
 
-- Use `/clear` frequently to maintain focused context
-- Create custom slash commands for repeated Task Master workflows
-- Configure tool allowlist to streamline permissions
-- Use headless mode for automation: `claude -p "task-master next"`
+- [README.md](README.md) - Project overview and setup guide
+- [DAILY_LOG_SETUP.md](DAILY_LOG_SETUP.md) - Log system configuration
+- [create_weekly_report_process_diagram.md](create_weekly_report_process_diagram.md) - Process flow diagrams
+- [code_cleanup_summary.md](code_cleanup_summary.md) - Code optimization report
+- [AGENTS.md](AGENTS.md) - TaskMaster AI integration guide
 
-### Multi-Task Updates
+## 🎯 Best Practices
 
-- Use `update --from=<id>` to update multiple future tasks
-- Use `update-task --id=<id>` for single task updates
-- Use `update-subtask --id=<id>` for implementation logging
+### Development Workflow
+1. **Start with TaskMaster**: Always check `task-master next` before starting work
+2. **Document changes**: Update task notes with implementation details
+3. **Test thoroughly**: Run tests after each significant change
+4. **Monitor logs**: Check log files for any issues
+5. **Update documentation**: Keep README and guides current
 
-### Research Mode
+### Code Quality
+1. **Follow PEP 8**: Maintain consistent Python code style
+2. **Add comments**: Document complex logic and business rules
+3. **Handle exceptions**: Implement proper error handling
+4. **Use type hints**: Add type annotations where helpful
+5. **Keep functions small**: Single responsibility principle
 
-- Add `--research` flag for research-based AI enhancement
-- Requires a research model API key like Perplexity (`PERPLEXITY_API_KEY`) in environment
-- Provides more informed task creation and updates
-- Recommended for complex technical tasks
+### Performance Optimization
+1. **Use pagination selectively**: Only when needed for large datasets
+2. **Implement caching**: Cache frequently accessed data
+3. **Optimize API calls**: Minimize redundant requests
+4. **Monitor resource usage**: Track memory and CPU usage
+5. **Profile code**: Identify bottlenecks and optimize
 
 ---
 
-_This guide ensures Claude Code has immediate access to Task Master's essential functionality for agentic development workflows._
+**Last Updated**: January 2025
+**Version**: TaskMaster AI integration, code optimization, advanced logging system
