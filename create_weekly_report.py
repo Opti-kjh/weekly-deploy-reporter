@@ -17,7 +17,7 @@
     --force-update   - 강제 업데이트 (변경사항 없어도 업데이트)
     --check-page     - Confluence 페이지 내용 확인
     --debug-links [티켓키] - 특정 티켓의 연결 관계 디버깅
-    --test           - 테스트 모드 (Slack 알림 전송 비활성화)
+    --mute           - MUTE 모드 (Slack 알림 전송 비활성화)
 
 환경 변수:
     LOG_LEVEL        - 로그 레벨 설정 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -30,7 +30,7 @@
     python create_weekly_report.py create --pagination
     python create_weekly_report.py update --force-update
     python create_weekly_report.py --debug-links IT-5027
-    python create_weekly_report.py current --test
+    python create_weekly_report.py current --mute
     LOG_LEVEL=DEBUG python create_weekly_report.py current
     VERBOSE_LOGGING=true python create_weekly_report.py current
 """
@@ -198,8 +198,9 @@ DEPLOY_LINKS_MACRO_TEMPLATE = '''
 def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_date):
     # JQL 쿼리를 단순화하여 필드 접근 문제를 우회
     jql_query = (
-        f"project = '{project_key}' "
-        f"ORDER BY updated DESC"
+        f"project = '{jira_project_key}' AND "
+        f"'{field}' >= '{start_date_str}' AND '{field}' <= '{end_date_str}' "
+        f"ORDER BY '{field}' ASC"
     )
     print_log(f"JQL: {jql_query}", 'DEBUG')
     try:
@@ -259,12 +260,47 @@ def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_ke
 </div>
 '''
     
-    # get_jira_issues_by_customfield_10817 함수를 사용하여 정확한 배포 예정 티켓 조회
-    print_log(f"=== Confluence 페이지용 배포 예정 티켓 조회 ===", 'DEBUG')
-    deploy_issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
+    # 매크로와 동일한 cf[10817] 형식을 사용하여 배포 예정 티켓 조회
+    print_log(f"=== Confluence 페이지용 배포 예정 티켓 조회 (매크로와 동일한 cf[10817] 형식 사용) ===", 'DEBUG')
     
-    # IT 티켓만 필터링하는 HTML 테이블 생성 (정확한 결과 사용)
-    deploy_links_html_table = create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url)
+    # cf[10817] 형식을 사용한 JQL 쿼리 생성
+    macro_jql_query = (
+        f"project = '{jira_project_key}' AND "
+        f"cf[10817] >= '{start_date_str}' AND cf[10817] <= '{end_date_str}' "
+        f"ORDER BY updated DESC"
+    )
+    print_log(f"사용할 JQL 쿼리: {macro_jql_query}", 'DEBUG')
+    
+    # 매크로와 동일한 cf[10817] 형식으로 티켓 조회
+    try:
+        deploy_issues = jira.search_issues(macro_jql_query, fields="key,summary,status,assignee,created,updated,customfield_10817", maxResults=1000)
+        deploy_issues_list = []
+        
+        for issue in deploy_issues:
+            issue_dict = {
+                'key': issue.key,
+                'summary': getattr(issue.fields, 'summary', ''),
+                'status': getattr(issue.fields, 'status', {}).name if hasattr(getattr(issue.fields, 'status', {}), 'name') else str(getattr(issue.fields, 'status', '')),
+                'assignee': getattr(issue.fields, 'assignee', {}).displayName if hasattr(getattr(issue.fields, 'assignee', {}), 'displayName') else str(getattr(issue.fields, 'assignee', '')),
+                'created': getattr(issue.fields, 'created', ''),
+                'updated': getattr(issue.fields, 'updated', ''),
+                'fields': {
+                    'summary': getattr(issue.fields, 'summary', ''),
+                    'status': {'name': getattr(issue.fields, 'status', {}).name if hasattr(getattr(issue.fields, 'status', {}), 'name') else str(getattr(issue.fields, 'status', ''))},
+                    'customfield_10817': getattr(issue.fields, 'customfield_10817', '')
+                }
+            }
+            deploy_issues_list.append(issue_dict)
+        
+        print_log(f"매크로와 동일한 cf[10817] 형식으로 조회된 티켓 수: {len(deploy_issues_list)}", 'INFO')
+        
+    except Exception as e:
+        print_log(f"매크로와 동일한 cf[10817] 형식으로 조회 실패: {e}", 'ERROR')
+        # 기존 방식으로 폴백
+        deploy_issues_list = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
+    
+    # IT 티켓만 필터링하는 HTML 테이블 생성 (매크로와 동일한 결과 사용)
+    deploy_links_html_table = create_deploy_links_html_table_with_issues(jira, deploy_issues_list, jira_url)
     
     # 전체 너비 레이아웃을 위한 컨테이너 추가 (이슈 현황 섹션 제외)
     full_width_container = '''
@@ -303,6 +339,7 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
 <ul>
 <li><strong>부모 IT 티켓</strong>: 배포 대상이 되는 IT 티켓</li>
 <li><strong>배포 티켓</strong>: "is deployed by" 관계로 연결된 IT 티켓들만 표시</li>
+<li><strong>생성 일시</strong>: 각 배포 티켓의 생성 일시가 최근 10분 이내에 생성된 경우 <span style="color: #FF0000; font-weight: bold;">빨간색</span>으로 표시됩니다</li>
 <li><strong>표시 형식</strong>: 각 배포 티켓이 새로운 줄로 구분되어 표시됩니다</li>
 </ul>
 <p><em>예시: IT-6516 티켓의 경우, prod-beluga-manager-consumer로 "deploy"에 대한 배포 Release(IT-4831, IT-5027) v1.5.0 (#166) 형태로 표시됩니다.</em></p>
@@ -312,12 +349,14 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
 <colgroup>
 <col style="width: 120px;" />
 <col style="width: 300px;" />
+<col style="width: 150px;" />
 <col style="width: 400px;" />
 </colgroup>
 <tbody>
 <tr>
 <th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">키</th>
 <th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">요약</th>
+<th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">생성 일시(최근 배포티켓)</th>
 <th style="text-align: left; background-color: #f4f5f7; padding: 8px; border: 1px solid #dfe1e6;">연결된 이슈</th>
 </tr>
 '''
@@ -345,6 +384,9 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
             linked_it_tickets = get_linked_it_tickets_with_retry(jira, issue_key)
             print_log(f"   연결된 IT 티켓 수: {len(linked_it_tickets)}", 'DEBUG')
             
+            # 연결된 IT 티켓들 중 가장 최근에 생성된 티켓의 생성 일시(최근 배포티켓) 조회
+            latest_date_obj, latest_created_date = get_latest_created_date_from_linked_tickets(jira, linked_it_tickets)
+            
             # 연결된 IT 티켓들을 포맷팅
             if linked_it_tickets:
                 linked_tickets_html = '<br>'.join([
@@ -354,10 +396,31 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
             else:
                 linked_tickets_html = '<em>연결된 IT 티켓 없음</em>'
             
+            # 생성 일시(최근 배포티켓) 표시 - 10분 이내면 빨간색으로 표시
+            if latest_date_obj and latest_created_date:
+                from datetime import datetime, timedelta
+                current_time = datetime.now()
+                time_diff = current_time - latest_date_obj
+                
+                print_log(f"    생성 일시 비교: {latest_created_date} vs 현재시간 {current_time.strftime('%Y-%m-%d %H:%M')}", 'DEBUG')
+                print_log(f"    시간 차이: {time_diff.total_seconds() / 3600:.2f}시간", 'DEBUG')
+                
+                # 10분 이내인지 확인
+                if time_diff <= timedelta(minutes=10):
+                    created_date_html = f'<span style="color: #FF0000; font-weight: bold;">{latest_created_date}</span>'
+                    print_log(f"    ✅ 빨간색으로 표시: {latest_created_date}", 'DEBUG')
+                else:
+                    created_date_html = latest_created_date
+                    print_log(f"    ⏭️ 일반 표시: {latest_created_date}", 'DEBUG')
+            else:
+                created_date_html = '<em>정보 없음</em>'
+                print_log(f"    ❌ 생성 일시 정보 없음", 'DEBUG')
+            
             html_content += f'''
 <tr>
 <td style="padding: 8px; border: 1px solid #dfe1e6;"><a href="{jira_url}/browse/{issue_key}">{issue_key}</a></td>
 <td style="padding: 8px; border: 1px solid #dfe1e6;">{summary}</td>
+<td style="padding: 8px; border: 1px solid #dfe1e6;">{created_date_html}</td>
 <td style="padding: 8px; border: 1px solid #dfe1e6;">{linked_tickets_html}</td>
 </tr>
 '''
@@ -373,6 +436,59 @@ def create_deploy_links_html_table_with_issues(jira, deploy_issues, jira_url):
     except Exception as e:
         print_log(f"배포 예정 목록 HTML 테이블 생성 실패: {e}", 'ERROR')
         return f'<p>배포 예정 목록 HTML 테이블 생성 중 오류가 발생했습니다: {e}</p>'
+
+def get_latest_created_date_from_linked_tickets(jira, linked_tickets):
+    """연결된 IT 티켓들 중 가장 최근에 생성된 티켓의 생성 일시를 반환합니다."""
+    try:
+        if not linked_tickets:
+            return None, None
+        
+        latest_date = None
+        latest_ticket_key = None
+        
+        for ticket in linked_tickets:
+            ticket_key = ticket['key']
+            try:
+                # Jira API에서 티켓의 상세 정보 조회 (created 필드 포함)
+                ticket_detail = jira.issue(ticket_key, fields='created')
+                
+                # created 필드에서 날짜 추출
+                created_date_str = ticket_detail.fields.created
+                if created_date_str:
+                    # ISO 형식의 날짜를 파싱 (예: 2024-01-15T10:30:00.000+0900)
+                    from datetime import datetime
+                    
+                    # 이미 한국 시간(+0900)으로 되어 있으므로 그대로 사용
+                    if '+0900' in created_date_str:
+                        created_date = datetime.fromisoformat(created_date_str)
+                        created_date_kr = created_date.replace(tzinfo=None)
+                    else:
+                        # UTC 시간인 경우 한국 시간으로 변환
+                        created_date = datetime.fromisoformat(created_date_str.replace('Z', '+00:00'))
+                        created_date_kr = created_date.replace(tzinfo=None) + timedelta(hours=9)
+                    
+                    # 가장 최근 날짜 업데이트
+                    if latest_date is None or created_date_kr > latest_date:
+                        latest_date = created_date_kr
+                        latest_ticket_key = ticket_key
+                        
+                    print_log(f"    티켓 {ticket_key} 생성일: {created_date_kr.strftime('%Y-%m-%d %H:%M')}", 'DEBUG')
+                    
+            except Exception as e:
+                print_log(f"    티켓 {ticket_key} 생성일 조회 실패: {e}", 'WARNING')
+                continue
+        
+        if latest_date:
+            formatted_date = latest_date.strftime('%Y-%m-%d %H:%M')
+            print_log(f"    최근 생성 티켓: {latest_ticket_key} ({formatted_date})", 'DEBUG')
+            return latest_date, formatted_date
+        else:
+            print_log("    생성일 정보를 찾을 수 없습니다.", 'WARNING')
+            return None, None
+            
+    except Exception as e:
+        print_log(f"연결된 티켓들의 생성일 조회 실패: {e}", 'ERROR')
+        return None, None
 
 def get_status_style(status):
     """상태에 따른 CSS 스타일을 반환합니다."""
@@ -1018,7 +1134,7 @@ def main():
     mode = "update"  # 기본값
     force_update = False  # 강제 업데이트 플래그
     use_pagination = False  # 페이지네이션 사용 여부 (기본값: False)
-    test_mode = False  # 테스트 모드 플래그 (Slack 알림 비활성화)
+    test_mode = False  # MUTE 모드 플래그 (Slack 알림 비활성화)
     
     if len(sys.argv) > 1:
         if sys.argv[1] == "--check-page":
@@ -1047,10 +1163,10 @@ def main():
         use_pagination = False
         print_log("페이지네이션 옵션이 비활성화되었습니다. (기본값)", 'INFO')
     
-    # --test 옵션 확인 (Slack 알림 비활성화)
-    if "--test" in sys.argv:
+    # --mute 옵션 확인 (Slack 알림 비활성화)
+    if "--mute" in sys.argv:
         test_mode = True
-        print_log("🧪 테스트 모드가 활성화되었습니다. Slack 알림이 전송되지 않습니다.", 'INFO')
+        print_log("🧪 MUTE 모드가 활성화되었습니다. Slack 알림이 전송되지 않습니다.", 'INFO')
     
     # 4. 날짜 범위 계산
     monday, sunday = get_week_range(mode)
@@ -1166,7 +1282,7 @@ def main():
                     changes_text = '\n\n'.join(all_changes)
                     summary_text = ' | '.join(change_summary)
                     
-                    # 테스트 모드가 아닌 경우에만 Slack 알림 전송
+                    # MUTE 모드가 아닌 경우에만 Slack 알림 전송
                     if not test_mode:
                         slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
                         send_slack(slack_msg)
@@ -1176,17 +1292,17 @@ def main():
                         
                         print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
                     else:
-                        print(f"🧪 테스트 모드: Slack 알림 전송 생략 (변경사항: {total_changes}개)")
+                        print(f"🧪 MUTE 모드: Slack 알림 전송 생략 (변경사항: {total_changes}개)")
                 elif total_changes > 0:
                     print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
                 else:
                     print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
                 
-                # 테스트 모드가 아닌 경우에만 새로운 배포 티켓 알림 전송
+                # MUTE 모드가 아닌 경우에만 새로운 배포 티켓 알림 전송
                 if not test_mode:
                     notify_new_deploy_tickets(issues, atlassian_url, page_title, deploy_message_enabled)
                 else:
-                    print("🧪 테스트 모드: 새로운 배포 티켓 알림 전송 생략")
+                    print("🧪 MUTE 모드: 새로운 배포 티켓 알림 전송 생략")
                 log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 업데이트.")
             else:
                 print(f"'{page_title}' 페이지 내용 변경 없음. 업데이트 생략.")
@@ -1239,7 +1355,7 @@ def main():
                 changes_text = '\n\n'.join(all_changes)
                 summary_text = ' | '.join(change_summary)
                 
-                # 테스트 모드가 아닌 경우에만 Slack 알림 전송
+                # MUTE 모드가 아닌 경우에만 Slack 알림 전송
                 if not test_mode:
                     slack_msg = f"📊 배포 일정 리포트가 업데이트되었습니다:\n{page_title}\n{page_url}\n\n{summary_text}\n\n{changes_text}"
                     send_slack(slack_msg)
@@ -1249,17 +1365,17 @@ def main():
                     
                     print(f"Slack 알림 전송 완료 (변경사항: {total_changes}개)")
                 else:
-                    print(f"🧪 테스트 모드: Slack 알림 전송 생략 (변경사항: {total_changes}개)")
+                    print(f"�� MUTE 모드: Slack 알림 전송 생략 (변경사항: {total_changes}개)")
             elif total_changes > 0:
                 print(f"동일한 변경사항에 대한 알림이 이미 전송됨 (변경사항: {total_changes}개)")
             else:
                 print("변경사항이 없어 Slack 알림을 전송하지 않습니다.")
             
-            # 테스트 모드가 아닌 경우에만 새로운 배포 티켓 알림 전송
+            # MUTE 모드가 아닌 경우에만 새로운 배포 티켓 알림 전송
             if not test_mode:
                 notify_new_deploy_tickets(issues, atlassian_url, page_title, deploy_message_enabled)
             else:
-                print("🧪 테스트 모드: 새로운 배포 티켓 알림 전송 생략")
+                print("🧪 MUTE 모드: 새로운 배포 티켓 알림 전송 생략")
             log(f"실행시간: {get_now_str()}\n대상: {', '.join([i['key'] for i in issues])} 생성.")
         
         # 스냅샷 저장

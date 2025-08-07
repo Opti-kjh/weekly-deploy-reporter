@@ -139,7 +139,7 @@ python create_weekly_report.py --debug-links IT-5332
 LOG_LEVEL=DEBUG python create_weekly_report.py current
 VERBOSE_LOGGING=true python create_weekly_report.py current
 
-# 테스트 모드 (Slack 알림 비활성화)
+# MUTE 모드 (Slack 알림 비활성화)
 python create_weekly_report.py current --test
 ```
 

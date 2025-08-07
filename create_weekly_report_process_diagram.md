@@ -114,7 +114,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[알림 처리 시작] --> B{테스트 모드?}
+    A[알림 처리 시작] --> B{MUTE 모드?}
     
     B -->|Yes| C[알림 전송 생략]
     B -->|No| D[시간 제한 확인<br/>10시~21시]
