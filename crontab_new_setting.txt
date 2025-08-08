@@ -1,7 +1,7 @@
 PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin
 
 # 매주 금요일 오전 9시 30분: 다음 주 리포트 생성
-30 9 * * 5 LOG_LEVEL=INFO /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_weekly_report.py create >> /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron_$(date +\%y\%m\%d).log 2>&1
+0 9 * * 5 LOG_LEVEL=INFO /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_weekly_report.py create >> /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron_$(date +\%y\%m\%d).log 2>&1
 
 # 매주 월~금 오전 8시~오후 9시: 5분 마다 이번 주 리포트 업데이트
 0,10,20,30,40,50 8-21 * * 1-5 LOG_LEVEL=INFO /Users/eos/Desktop/weekly-deploy-reporter/venv/bin/python /Users/eos/Desktop/weekly-deploy-reporter/create_weekly_report.py current --pagination >> /Users/eos/Desktop/weekly-deploy-reporter/logs/runtime/cron_$(date +\%y\%m\%d).log 2>&1

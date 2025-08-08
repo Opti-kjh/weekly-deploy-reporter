@@ -261,19 +261,25 @@ def create_confluence_content(jql_query, issues, jira_url, jira, jira_project_ke
 '''
     
     # 매크로와 동일한 cf[10817] 형식을 사용하여 배포 예정 티켓 조회
-    print_log(f"=== Confluence 페이지용 배포 예정 티켓 조회 (매크로와 동일한 cf[10817] 형식 사용) ===", 'DEBUG')
+    print_log(f"\n=== Confluence 페이지용 배포 예정 티켓 조회 ===", 'DEBUG')
+    print_log(f"1. 매크로 JQL 쿼리 정보", 'DEBUG')
+    print_log(f"원본 JQL: {jql_query}", 'DEBUG')
     
-    # cf[10817] 형식을 사용한 JQL 쿼리 생성
+    # 매크로용 JQL 쿼리와 API 조회용 JQL 쿼리를 동일하게 설정
     macro_jql_query = (
         f"project = '{jira_project_key}' AND "
         f"cf[10817] >= '{start_date_str}' AND cf[10817] <= '{end_date_str}' "
-        f"ORDER BY updated DESC"
+        f"ORDER BY created DESC"
     )
-    print_log(f"사용할 JQL 쿼리: {macro_jql_query}", 'DEBUG')
+    print_log(f"매크로 JQL: {macro_jql_query}", 'DEBUG')
+    print_log(f"2. API 조회 정보", 'DEBUG')
+    print_log(f"API JQL: {jql_query}", 'DEBUG')
+    print_log(f"조회된 이슈 수: {len(issues)}", 'INFO')
     
     # 매크로와 동일한 cf[10817] 형식으로 티켓 조회
     try:
         deploy_issues = jira.search_issues(macro_jql_query, fields="key,summary,status,assignee,created,updated,customfield_10817", maxResults=1000)
+        print_log(f"매크로 JQL로 조회된 이슈 수: {len(deploy_issues)}", 'INFO')
         deploy_issues_list = []
         
         for issue in deploy_issues:
@@ -644,9 +650,9 @@ def send_slack(text):
         print("SLACK_WEBHOOK_URL 미설정, Slack 알림 생략")
         return
     
-    # 시간 제한 확인 (8시~21시 사이에만 알림 전송)
-    notification_start_hour =10
-    notification_end_hour = 21
+    # 시간 제한 확인 (9시~22시 사이에만 알림 전송)
+    notification_start_hour =9
+    notification_end_hour = 22
     
     today = datetime.now()
     if today.hour < notification_start_hour or today.hour >= notification_end_hour:
@@ -977,8 +983,12 @@ def get_jira_issues_by_customfield_10817(jira, project_key, start_date, end_date
     print_log(f"페이지네이션 사용: {'예' if use_pagination else '아니오'}", 'INFO')
     
     try:
-        # 1단계: cf[10817] 형식으로 JQL 쿼리 (Jira 클라우드에서 작동)
-        base_jql = f"project = '{project_key}' AND cf[10817] IS NOT EMPTY ORDER BY created DESC"
+        # 1단계: cf[10817] 형식으로 JQL 쿼리 (매크로와 동일한 조건 사용)
+        base_jql = (
+            f"project = '{project_key}' AND "
+            f"cf[10817] >= '{start_date}' AND cf[10817] <= '{end_date}' "
+            f"ORDER BY created DESC"
+        )
         fields_param = f"key,summary,status,assignee,created,updated,{JIRA_DEPLOY_DATE_FIELD_ID}"
         
         print_log(f"기본 JQL: {base_jql}", 'DEBUG')
