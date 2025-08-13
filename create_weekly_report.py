@@ -199,8 +199,8 @@ def get_jira_issues_simple(jira, project_key, date_field_id, start_date, end_dat
     # JQL 쿼리를 단순화하여 필드 접근 문제를 우회
     jql_query = (
         f"project = '{jira_project_key}' AND "
-        f"'{field}' >= '{start_date_str}' AND '{field}' <= '{end_date_str}' "
-        f"ORDER BY '{field}' ASC"
+        f"cf[10817] >= '{start_date_str}' AND cf[10817] <= '{end_date_str}' "
+        f"ORDER BY cf[10817] ASC"
     )
     print_log(f"JQL: {jql_query}", 'DEBUG')
     try:
@@ -651,7 +651,7 @@ def send_slack(text):
         return
     
     # 시간 제한 확인 (9시~22시 사이에만 알림 전송)
-    notification_start_hour =9
+    notification_start_hour = 9
     notification_end_hour = 22
     
     today = datetime.now()
@@ -1207,10 +1207,10 @@ def main():
     print_log(f"대상 기간: {start_date_str} ~ {end_date_str}", 'INFO')
     print_log(f"페이지 제목: {page_title}", 'INFO')
 
-    # 5. Jira 이슈 조회 (customfield_10817 직접 조회 사용)
+    # 5. Jira 이슈 조회 (cf[10817] 직접 조회 사용)
     jql_query = (
         f"project = '{jira_project_key}' AND "
-        f"'{JIRA_DEPLOY_DATE_FIELD_ID}' >= '{start_date_str}' AND '{JIRA_DEPLOY_DATE_FIELD_ID}' <= '{end_date_str}' "
+        f"cf[10817] >= '{start_date_str}' AND cf[10817] <= '{end_date_str}' "
         f"ORDER BY updated DESC"
     )
     issues = get_jira_issues_by_customfield_10817(jira, jira_project_key, start_date_str, end_date_str, use_pagination)
